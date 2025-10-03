@@ -175,3 +175,84 @@ def format_ratio(value):
         return f"{float(value):.2f}"
     except:
         return "N/A"
+
+@st.cache_data(ttl=600)  # Cache for 10 minutes
+def get_historical_data(ticker, period="1y"):
+    """
+    Fetch historical price and financial data for a company
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        period (str): Time period (1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, max)
+    
+    Returns:
+        dict: Dictionary with historical data
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        
+        # Get historical price data
+        hist = stock.history(period=period)
+        
+        if hist.empty:
+            return None
+        
+        # Get quarterly financials
+        quarterly_financials = stock.quarterly_financials
+        quarterly_balance_sheet = stock.quarterly_balance_sheet
+        quarterly_cashflow = stock.quarterly_cashflow
+        
+        return {
+            'price_history': hist,
+            'quarterly_financials': quarterly_financials,
+            'quarterly_balance_sheet': quarterly_balance_sheet,
+            'quarterly_cashflow': quarterly_cashflow
+        }
+    except Exception as e:
+        st.error(f"Error fetching historical data for {ticker}: {str(e)}")
+        return None
+
+def extract_historical_metrics(historical_data):
+    """
+    Extract key metrics from historical financial statements
+    
+    Args:
+        historical_data (dict): Dictionary containing historical data
+    
+    Returns:
+        pd.DataFrame: DataFrame with historical metrics over time
+    """
+    try:
+        metrics_over_time = {}
+        
+        financials = historical_data.get('quarterly_financials')
+        
+        if financials is not None and not financials.empty:
+            # Extract revenue
+            if 'Total Revenue' in financials.index:
+                metrics_over_time['Revenue'] = financials.loc['Total Revenue']
+            
+            # Extract net income
+            if 'Net Income' in financials.index:
+                metrics_over_time['Net Income'] = financials.loc['Net Income']
+            
+            # Extract gross profit
+            if 'Gross Profit' in financials.index:
+                metrics_over_time['Gross Profit'] = financials.loc['Gross Profit']
+            
+            # Calculate profit margin
+            if 'Net Income' in financials.index and 'Total Revenue' in financials.index:
+                revenue = financials.loc['Total Revenue']
+                net_income = financials.loc['Net Income']
+                metrics_over_time['Profit Margin'] = (net_income / revenue * 100).replace([np.inf, -np.inf], np.nan)
+        
+        if metrics_over_time:
+            df = pd.DataFrame(metrics_over_time)
+            # Sort by date (most recent first)
+            df = df.sort_index(ascending=False)
+            return df
+        
+        return None
+        
+    except Exception as e:
+        return None

@@ -4,6 +4,7 @@ import numpy as np
 from components.company_selector import render_company_selector
 from components.metrics_display import render_metrics_comparison
 from components.charts import render_comparison_charts
+from components.historical_trends import render_historical_trends
 from utils.financial_data import get_company_data, get_financial_metrics
 from utils.calculations import calculate_percentage_differences
 
@@ -85,35 +86,46 @@ else:
     if len(comparison_data) >= 2:
         st.session_state.comparison_data = comparison_data
         
-        # Display metrics comparison
-        st.subheader("📊 Financial Metrics Comparison")
-        render_metrics_comparison(comparison_data)
+        # Create tabs for different analysis views
+        analysis_tab1, analysis_tab2 = st.tabs([
+            "📊 Current Comparison", 
+            "📈 Historical Trends"
+        ])
         
-        # Display comparison charts
-        st.subheader("📈 Interactive Comparison Charts")
-        render_comparison_charts(comparison_data)
-        
-        # Percentage differences analysis
-        st.subheader("🔍 Comparative Analysis")
-        percentage_diffs = calculate_percentage_differences(comparison_data)
-        
-        if percentage_diffs is not None:
-            st.markdown("**Performance Differences (% vs Average)**")
+        with analysis_tab1:
+            # Display metrics comparison
+            st.subheader("📊 Financial Metrics Comparison")
+            render_metrics_comparison(comparison_data)
             
-            # Create columns for better display
-            companies = list(comparison_data.keys())
-            cols = st.columns(len(companies))
+            # Display comparison charts
+            st.subheader("📈 Interactive Comparison Charts")
+            render_comparison_charts(comparison_data)
             
-            for i, company in enumerate(companies):
-                with cols[i]:
-                    st.markdown(f"**{company}**")
-                    company_diffs = percentage_diffs[company]
-                    
-                    for metric, diff in company_diffs.items():
-                        if not pd.isna(diff):
-                            color = "green" if diff > 0 else "red"
-                            st.markdown(f"{metric}: <span style='color:{color}'>{diff:+.1f}%</span>", 
-                                      unsafe_allow_html=True)
+            # Percentage differences analysis
+            st.subheader("🔍 Comparative Analysis")
+            percentage_diffs = calculate_percentage_differences(comparison_data)
+        
+            if percentage_diffs is not None:
+                st.markdown("**Performance Differences (% vs Average)**")
+                
+                # Create columns for better display
+                companies = list(comparison_data.keys())
+                cols = st.columns(len(companies))
+                
+                for i, company in enumerate(companies):
+                    with cols[i]:
+                        st.markdown(f"**{company}**")
+                        company_diffs = percentage_diffs[company]
+                        
+                        for metric, diff in company_diffs.items():
+                            if not pd.isna(diff):
+                                color = "green" if diff > 0 else "red"
+                                st.markdown(f"{metric}: <span style='color:{color}'>{diff:+.1f}%</span>", 
+                                          unsafe_allow_html=True)
+        
+        with analysis_tab2:
+            # Display historical trends
+            render_historical_trends(selected_companies)
     
     elif len(comparison_data) == 1:
         st.info("Only one company's data was successfully fetched. Please add more companies for comparison.")
