@@ -7,6 +7,7 @@ from components.charts import render_comparison_charts
 from components.historical_trends import render_historical_trends
 from components.industry_benchmarking import render_industry_benchmarking
 from components.export_reports import render_export_options
+from components.custom_metrics import render_custom_metrics
 from utils.financial_data import get_company_data, get_financial_metrics
 from utils.calculations import calculate_percentage_differences
 
@@ -92,10 +93,11 @@ else:
         render_export_options(comparison_data)
         
         # Create tabs for different analysis views
-        analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs([
+        analysis_tab1, analysis_tab2, analysis_tab3, analysis_tab4 = st.tabs([
             "📊 Current Comparison", 
             "📈 Historical Trends",
-            "🏭 Industry Benchmarking"
+            "🏭 Industry Benchmarking",
+            "🧮 Custom Metrics"
         ])
         
         with analysis_tab1:
@@ -136,6 +138,10 @@ else:
         with analysis_tab3:
             # Display industry benchmarking
             render_industry_benchmarking(comparison_data)
+        
+        with analysis_tab4:
+            # Display custom metrics
+            render_custom_metrics(comparison_data)
     
     elif len(comparison_data) == 1:
         st.info("Only one company's data was successfully fetched. Please add more companies for comparison.")
