@@ -15,7 +15,10 @@ app = Flask(__name__, static_folder='static')
 CORS(app)
 
 # Initialize OpenAI client
-client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+api_key = os.environ.get('OPENAI_API_KEY')
+if not api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
+client = OpenAI(api_key=api_key)
 
 def calculate_metrics(ticker):
     """Calculate key financial metrics for a given ticker"""
