@@ -10,6 +10,8 @@ import pandas as pd
 import os
 from openai import OpenAI
 import json
+import time
+from functools import lru_cache
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
@@ -20,81 +22,121 @@ if not api_key:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
 client = OpenAI(api_key=api_key)
 
-def calculate_metrics(ticker):
-    """Calculate key financial metrics for a given ticker"""
-    try:
-        print(f"Fetching data for {ticker}...")
-        stock = yf.Ticker(ticker)
-        
-        income_quarterly = stock.quarterly_income_stmt
-        cash_flow_quarterly = stock.quarterly_cashflow
-        
-        if income_quarterly.empty or cash_flow_quarterly.empty:
-            print(f"No data available for {ticker}")
-            return None
-        
-        # Gross Margin %
-        if 'Gross Profit' in income_quarterly.index:
-            income_quarterly.loc['Gross Margin %'] = (
-                income_quarterly.loc['Gross Profit'] * 100.0 / income_quarterly.loc['Total Revenue']
-            )
-        else:
-            income_quarterly.loc['Gross Margin %'] = (
-                (income_quarterly.loc['Total Revenue'] - income_quarterly.loc['Cost Of Revenue']) * 100.0 / 
-                income_quarterly.loc['Total Revenue']
-            )
-        
-        # Operating Expense
-        if 'Operating Expense' not in income_quarterly.index:
-            if ('Selling General And Administration' in income_quarterly.index and 
-                'Research And Development' in income_quarterly.index):
-                income_quarterly.loc['Operating Expense'] = (
-                    income_quarterly.loc['Selling General And Administration'] + 
-                    income_quarterly.loc['Research And Development']
+def calculate_metrics(ticker, max_retries=3):
+    """Calculate key financial metrics for a given ticker with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            print(f"Fetching data for {ticker} (attempt {attempt + 1}/{max_retries})...")
+            if attempt > 0:
+                wait_time = (2 ** attempt) * 2
+                print(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+
+            stock = yf.Ticker(ticker)
+            if not hasattr(stock, "_session_configured"):
+                stock.session.headers["User-Agent"] = (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 )
-        
-        # EBIT
-        if 'EBIT' not in income_quarterly.index:
-            if 'Operating Income' in income_quarterly.index:
-                income_quarterly.loc['EBIT'] = income_quarterly.loc['Operating Income']
-        
-        # Free Cash Flow
-        if 'Free Cash Flow' not in cash_flow_quarterly.index:
-            if ('Operating Cash Flow' in cash_flow_quarterly.index and 
-                'Capital Expenditure' in cash_flow_quarterly.index):
-                cash_flow_quarterly.loc['Free Cash Flow'] = (
-                    cash_flow_quarterly.loc['Operating Cash Flow'] + 
-                    cash_flow_quarterly.loc['Capital Expenditure']
+                stock._session_configured = True
+
+            time.sleep(1)
+            try:
+                income_quarterly = stock.quarterly_income_stmt
+                time.sleep(0.5)
+                cash_flow_quarterly = stock.quarterly_cashflow
+            except Exception as fetch_error:
+                error_msg = str(fetch_error)
+                if "429" in error_msg and attempt < max_retries - 1:
+                    print("Rate limited! Will retry...")
+                    continue
+                print(f"Error fetching data for {ticker}: {error_msg}")
+                return None
+
+            print(f"Income statement columns: {len(income_quarterly.columns) if not income_quarterly.empty else 0}")
+            print(f"Cash flow columns: {len(cash_flow_quarterly.columns) if not cash_flow_quarterly.empty else 0}")
+
+            if income_quarterly.empty or cash_flow_quarterly.empty:
+                if attempt < max_retries - 1:
+                    print(f"Empty data for {ticker}, retrying...")
+                    continue
+                print(f"No data available for {ticker} (empty dataframes)")
+                return None
+
+            if "Gross Profit" in income_quarterly.index:
+                income_quarterly.loc["Gross Margin %"] = (
+                    income_quarterly.loc["Gross Profit"] * 100.0
+                    / income_quarterly.loc["Total Revenue"]
                 )
-        
-        metrics_to_extract = ['Total Revenue', 'Operating Expense', 'Gross Margin %', 'EBIT', 'Net Income']
-        
-        filtered_income = income_quarterly[income_quarterly.index.isin(metrics_to_extract)].iloc[:, 0:5]
-        filtered_cash_flow = cash_flow_quarterly[cash_flow_quarterly.index == 'Free Cash Flow'].iloc[:, 0:5]
-        
-        if filtered_income.isna().sum().sum() == 0 and filtered_cash_flow.isna().sum().sum() == 0:
-            result = pd.concat([filtered_income, filtered_cash_flow], axis=0)
-            result.columns = result.columns.to_period('Q').astype(str)
-            
-            result_dict = {}
-            for metric in result.index:
-                result_dict[metric] = {}
-                for quarter in result.columns:
-                    value = result.loc[metric, quarter]
-                    if pd.notna(value):
-                        result_dict[metric][quarter] = float(value) if metric == 'Gross Margin %' else int(value)
-                    else:
-                        result_dict[metric][quarter] = None
-            
-            print(f"Successfully processed data for {ticker}")
-            return result_dict
-        else:
+            else:
+                income_quarterly.loc["Gross Margin %"] = (
+                    (income_quarterly.loc["Total Revenue"] - income_quarterly.loc["Cost Of Revenue"]) * 100.0
+                    / income_quarterly.loc["Total Revenue"]
+                )
+
+            if "Operating Expense" not in income_quarterly.index:
+                if (
+                    "Selling General And Administration" in income_quarterly.index
+                    and "Research And Development" in income_quarterly.index
+                ):
+                    income_quarterly.loc["Operating Expense"] = (
+                        income_quarterly.loc["Selling General And Administration"]
+                        + income_quarterly.loc["Research And Development"]
+                    )
+
+            if "EBIT" not in income_quarterly.index and "Operating Income" in income_quarterly.index:
+                income_quarterly.loc["EBIT"] = income_quarterly.loc["Operating Income"]
+
+            if "Free Cash Flow" not in cash_flow_quarterly.index:
+                if (
+                    "Operating Cash Flow" in cash_flow_quarterly.index
+                    and "Capital Expenditure" in cash_flow_quarterly.index
+                ):
+                    cash_flow_quarterly.loc["Free Cash Flow"] = (
+                        cash_flow_quarterly.loc["Operating Cash Flow"]
+                        + cash_flow_quarterly.loc["Capital Expenditure"]
+                    )
+
+            metrics_to_extract = [
+                "Total Revenue",
+                "Operating Expense",
+                "Gross Margin %",
+                "EBIT",
+                "Net Income",
+            ]
+
+            filtered_income = income_quarterly[
+                income_quarterly.index.isin(metrics_to_extract)
+            ].iloc[:, 0:5]
+            filtered_cash_flow = cash_flow_quarterly[
+                cash_flow_quarterly.index == "Free Cash Flow"
+            ].iloc[:, 0:5]
+
+            if filtered_income.isna().sum().sum() == 0 and filtered_cash_flow.isna().sum().sum() == 0:
+                result = pd.concat([filtered_income, filtered_cash_flow], axis=0)
+                result.columns = result.columns.to_period("Q").astype(str)
+
+                result_dict = {}
+                for metric in result.index:
+                    result_dict[metric] = {}
+                    for quarter in result.columns:
+                        value = result.loc[metric, quarter]
+                        if pd.notna(value):
+                            result_dict[metric][quarter] = (
+                                float(value) if metric == "Gross Margin %" else int(value)
+                            )
+                        else:
+                            result_dict[metric][quarter] = None
+
+                print(f"Successfully processed data for {ticker}")
+                return result_dict
+
             print(f"Data contains NaN values for {ticker}")
             return None
-            
-    except Exception as e:
-        print(f"Error calculating metrics for {ticker}: {str(e)}")
-        return None
+        except Exception as e:
+            print(f"Error calculating metrics for {ticker}: {str(e)}")
+            return None
+
+    return None
 
 
 @app.route('/')
