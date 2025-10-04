@@ -278,11 +278,13 @@ def index():
                     <h3 class="text-2xl font-semibold text-gray-800 mb-4">${latestQuarter} Metrics</h3>
                     <table class="w-full" id="metricsTable"></table>
                 </div>
+                <div id="timeSeriesTables" class="space-y-6"></div>
             `;
             resultsDiv.classList.remove('hidden');
 
             createCharts(data, validTickers, sortedQuarters);
             createTable(data, validTickers, sortedQuarters);
+            createTimeSeriesTables(data, validTickers, sortedQuarters);
         }
 
         function createCharts(data, tickers, quarters) {
@@ -359,6 +361,55 @@ def index():
 
             html += '</tbody>';
             document.getElementById('metricsTable').innerHTML = html;
+        }
+
+        function createTimeSeriesTables(data, tickers, quarters) {
+            const metrics = ['Total Revenue', 'Operating Expense', 'Gross Margin %', 'EBIT', 'Net Income', 'Free Cash Flow'];
+            const container = document.getElementById('timeSeriesTables');
+            
+            let html = '';
+            tickers.forEach(ticker => {
+                html += `
+                    <div class="bg-white rounded-lg shadow-xl p-6 overflow-x-auto">
+                        <h3 class="text-2xl font-semibold text-gray-800 mb-4">${ticker} - 5 Quarter Time Series</h3>
+                        <table class="w-full">
+                            <thead>
+                                <tr class="border-b-2 border-gray-300">
+                                    <th class="text-left py-3 px-4"></th>
+                                    ${quarters.map(q => `<th class="text-right py-3 px-4">${q}</th>`).join('')}
+                                </tr>
+                            </thead>
+                            <tbody>`;
+                
+                metrics.forEach(metric => {
+                    html += `<tr class="border-b border-gray-200 hover:bg-gray-50">
+                        <td class="py-3 px-4 font-medium">${metric}</td>`;
+                    
+                    quarters.forEach(quarter => {
+                        const value = data[ticker][metric]?.[quarter];
+                        let formatted = 'N/A';
+                        
+                        if (value !== undefined && value !== null) {
+                            if (metric === 'Gross Margin %') {
+                                formatted = value.toFixed(6);
+                            } else {
+                                formatted = (value / 1).toFixed(1);
+                            }
+                        }
+                        
+                        html += `<td class="text-right py-3 px-4">${formatted}</td>`;
+                    });
+                    
+                    html += '</tr>';
+                });
+                
+                html += `
+                            </tbody>
+                        </table>
+                    </div>`;
+            });
+            
+            container.innerHTML = html;
         }
 
         function showError(msg) {

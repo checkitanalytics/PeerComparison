@@ -1,8 +1,8 @@
-# Financial Data Comparison Platform
+# Peer Company Comparison Platform
 
 ## Overview
 
-This is a Streamlit-based financial data comparison platform that enables users to analyze and compare key financial metrics across multiple companies. The application fetches real-time financial data from Yahoo Finance and provides interactive visualizations, historical trend analysis, industry benchmarking, and customizable reporting capabilities. Users can save comparison sets to a PostgreSQL database for future reference.
+This is a Flask-based peer company comparison platform that enables users to analyze and compare key financial metrics across multiple companies. The application uses OpenAI's GPT-4 to automatically identify peer companies and fetches real-time financial data from Yahoo Finance. It provides interactive visualizations and detailed time series analysis.
 
 ## User Preferences
 
@@ -12,112 +12,146 @@ Preferred communication style: Simple, everyday language.
 
 ### Frontend Architecture
 
-**Framework Choice: Streamlit**
-- **Problem**: Need for rapid development of an interactive financial analytics dashboard with minimal frontend complexity
-- **Solution**: Streamlit provides a Python-native approach to building web applications with built-in state management and reactive components
-- **Rationale**: Eliminates need for separate frontend framework (React/Vue), reduces development time, and allows data scientists to build UI without JavaScript knowledge
-- **Trade-offs**: Less flexibility than traditional web frameworks, but sufficient for data-focused applications with standard UI patterns
+**Framework Choice: Flask with Embedded HTML**
+- **Problem**: Need for a simple, integrated web application without complex frontend build processes
+- **Solution**: Flask serves both API endpoints and HTML/JavaScript frontend in a single file
+- **Rationale**: Rapid development, no build step required, easy deployment on Replit
+- **Trade-offs**: Less separation of concerns than SPA frameworks, but simpler for single-page applications
 
-**Component-Based Structure**
-- Modular component architecture with separation of concerns
-- Components organized by functionality: company_selector, metrics_display, charts, historical_trends, industry_benchmarking, export_reports, custom_metrics, saved_sets
-- Each component is self-contained and renders specific UI sections
-- Promotes code reusability and maintainability
+**UI Components**
+- Tailwind CSS for responsive styling via CDN
+- Chart.js for interactive financial charts (bar charts, line charts)
+- Vanilla JavaScript for dynamic content rendering
+- Single-page application with dynamic content updates
 
 **State Management**
-- Uses Streamlit's session_state for client-side state persistence
-- Key state variables: `selected_companies`, `comparison_data`, `db_initialized`
-- State persists across reruns within a user session
-
-**Layout Pattern**
-- Wide layout with sidebar for controls and main content area for visualizations
-- Responsive column-based layouts using Streamlit's column system
-- Tab-based organization for different metric categories and analysis views
+- Client-side JavaScript manages application state
+- Asynchronous API calls to Flask backend
+- Dynamic DOM manipulation for results display
 
 ### Backend Architecture
 
+**Web Framework: Flask**
+- Lightweight Python web framework
+- RESTful API endpoints for peer discovery and metrics fetching
+- CORS enabled for development flexibility
+
+**AI-Powered Peer Discovery**
+- **Library**: OpenAI API (GPT-4)
+- **Purpose**: Automatically identify 3 peer companies based on industry and market cap
+- **Input**: User-provided stock ticker symbol
+- **Output**: JSON response with peer company tickers and names
+
 **Data Fetching Layer**
-- **Library Choice: yfinance (Yahoo Finance API wrapper)**
-- Provides real-time and historical financial data for publicly traded companies
-- Implements caching strategy with 5-minute TTL to reduce API calls and improve performance
-- Graceful error handling for invalid tickers or API failures
+- **Library**: yfinance (Yahoo Finance API wrapper)
+- **Retry Logic**: Up to 3 attempts with exponential backoff (4s, 8s delays)
+- **Rate Limiting Protection**: 
+  - Custom User-Agent headers to avoid blocking
+  - Delays between requests (1s before fetch, 0.5s between different API calls)
+  - Detects HTTP 429 errors and automatically retries
+- **Data Retrieved**: Quarterly income statements and cash flow statements
 
-**Business Logic Layer (Utils)**
-- `financial_data.py`: Data acquisition and metric extraction
-- `calculations.py`: Financial ratio calculations and percentage difference computations
-- `database.py`: PostgreSQL database operations for saved comparison sets
-- Clear separation between data fetching, processing, and persistence
+**Financial Metrics Calculation**
+- Gross Margin % (calculated from Gross Profit and Total Revenue)
+- Operating Expense (sum of SG&A and R&D)
+- EBIT (from Operating Income)
+- Free Cash Flow (Operating Cash Flow + Capital Expenditure)
+- Handles missing data gracefully with fallback calculations
 
-**Calculation Engine**
-- Computes derived financial ratios from raw metrics
-- Calculates percentage differences from peer group averages
-- Supports custom formula creation for advanced analysis
+### API Endpoints
 
-### Data Storage
+**POST /api/find-peers**
+- Accepts: `{ "ticker": "AAPL" }`
+- Returns: JSON with primary company, industry, and 3 peer companies
+- Uses OpenAI GPT-4 for intelligent peer matching
 
-**PostgreSQL Database**
-- **Purpose**: Persistent storage for user-saved comparison sets
-- **Schema Design**: Single table `comparison_sets` with fields:
-  - `id` (SERIAL PRIMARY KEY)
-  - `name` (VARCHAR 255) - User-defined set name
-  - `description` (TEXT) - Optional description
-  - `companies` (TEXT) - Serialized list of ticker symbols
-  - `created_at`, `updated_at` (TIMESTAMP)
-- **Connection Pattern**: Environment variable-based configuration using standard PostgreSQL connection parameters (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD)
-- **Design Decision**: Simple relational schema adequate for storing comparison sets; companies stored as text field rather than separate table due to simplicity and lack of need for complex querying
+**POST /api/get-metrics**
+- Accepts: `{ "tickers": ["AAPL", "MSFT", "GOOGL", "AMZN"] }`
+- Returns: Financial metrics for each ticker (5 quarters of data)
+- Filters out companies with missing/incomplete data
 
-**Caching Strategy**
-- Streamlit's `@st.cache_data` decorator with 5-minute TTL on financial data fetches
-- Reduces redundant API calls for the same ticker within cache window
-- Improves application responsiveness and reduces external API load
+**GET /api/health**
+- Health check endpoint
+- Verifies OpenAI API configuration
 
-### Visualization Layer
+### Visualization Features
 
-**Library Choice: Plotly**
-- **Problem**: Need for interactive, publication-quality financial charts
-- **Solution**: Plotly provides interactive charts with hover details, zoom, pan capabilities
-- **Alternatives Considered**: Matplotlib (static charts, less interactive), Altair (limited customization)
-- **Pros**: Rich interactivity, professional appearance, extensive chart types
-- **Cons**: Larger bundle size compared to simpler charting libraries
+**1. Total Revenue Comparison**
+- Bar chart comparing revenue across companies
+- Data shown in billions of dollars
+- Up to 5 quarters displayed
+- Color-coded by company
 
-**Chart Types Implemented**
-- Bar charts for metric comparisons
-- Line charts for historical trends
-- Pie charts for sector distribution
-- Multi-axis subplots for combined visualizations
+**2. Gross Margin % Trend**
+- Line chart showing margin trends over time
+- Percentage-based comparison
+- Helps identify operational efficiency patterns
 
-### Report Generation
+**3. Latest Quarter Metrics Table**
+- Cross-company comparison for most recent quarter
+- Shows actual quarter/year (e.g., "2025Q2 Metrics")
+- Metrics: Total Revenue, Gross Margin %, Operating Expense, EBIT, Net Income, Free Cash Flow
+- Automatically filters out companies with missing data (N/A values)
 
-**Export Formats**
-- **Excel (.xlsx)**: Using openpyxl for structured spreadsheet reports with formatting
-- **PDF Reports**: Using fpdf library for formatted PDF generation
-- Downloadable reports include comparison tables, calculated metrics, and metadata
+**4. Time Series Tables (NEW)**
+- Individual table for each company showing 5 quarters of historical data
+- Quarter columns: Most recent to oldest (e.g., 2025Q2, 2025Q1, 2024Q4, 2024Q3, 2024Q2)
+- Metric rows: Total Revenue, Operating Expense, Gross Margin %, EBIT, Net Income, Free Cash Flow
+- Raw numerical values for detailed analysis
+- Gross Margin % shown as decimal values
+- Other metrics shown with full precision
+
+### Data Handling
+
+**Missing Data Strategy**
+- Companies with no available data are automatically filtered from comparison tables and charts
+- Individual metrics may show "N/A" if specific data points are unavailable
+- Yahoo Finance API sometimes has incomplete data for certain companies/quarters
+
+**Data Format**
+- Quarters formatted as "YYYYQX" (e.g., "2024Q3")
+- Revenue/expense values stored as integers
+- Gross Margin % stored as floating-point percentage values
+- Up to 5 quarters of historical data retrieved per company
 
 ### External Dependencies
 
-**Yahoo Finance API (via yfinance library)**
-- **Purpose**: Primary data source for real-time and historical financial data
-- **Data Accessed**: Stock prices, company info, financial statements, balance sheets, cash flow statements
-- **Integration Pattern**: Direct API calls through Python library wrapper
-- **Rate Limiting**: Managed through caching layer
+**OpenAI API**
+- **Purpose**: Intelligent peer company identification
+- **Model**: GPT-4
+- **Authentication**: API key stored in OPENAI_API_KEY environment variable
+- **Usage**: Single API call per peer discovery request
 
-**PostgreSQL Database**
-- **Purpose**: Persistent storage for user-saved comparison sets
-- **Connection**: Standard psycopg2 connection with environment variable configuration
-- **Deployment Consideration**: Requires PostgreSQL instance with credentials configured in environment
+**Yahoo Finance API (via yfinance)**
+- **Purpose**: Real-time quarterly financial data
+- **Data Sources**: Income statements, cash flow statements
+- **Rate Limiting**: Aggressive rate limits requiring retry logic and delays
+- **Reliability**: Some companies may have missing or incomplete data
 
 **Python Package Dependencies**
-- `streamlit`: Web application framework
+- `flask`: Web application framework
+- `flask-cors`: Cross-origin resource sharing support
 - `yfinance`: Yahoo Finance API wrapper
 - `pandas`: Data manipulation and analysis
-- `numpy`: Numerical computations
-- `plotly`: Interactive visualization
-- `psycopg2`: PostgreSQL database adapter
-- `openpyxl`: Excel file generation
-- `fpdf`: PDF report generation
+- `openai`: OpenAI API client
+- `httpx==0.23.3`: HTTP client (pinned version for OpenAI compatibility)
 
-**Design Pattern: Multi-Company Comparison**
-- Supports 2-10 companies for simultaneous comparison
-- Implements validation to ensure minimum comparison threshold
-- Data structures use company ticker as key for efficient lookups
-- Percentage difference calculations normalize metrics across different scales
+### Design Patterns
+
+**Error Handling**
+- Retry logic with exponential backoff for Yahoo Finance rate limiting
+- Graceful degradation when data is unavailable
+- User-friendly error messages
+- Backend logging for debugging
+
+**Performance Optimization**
+- Parallel data fetching for multiple companies
+- Client-side chart rendering
+- Responsive UI with loading indicators
+
+**Recent Updates (October 2025)**
+- Added retry logic with exponential backoff for Yahoo Finance API
+- Implemented custom User-Agent headers to avoid blocking
+- Fixed missing data handling - companies with no data are filtered out
+- Changed table headers to show actual quarter/year instead of "Latest Quarter"
+- Added time series tables showing 5 quarters of historical data per company
