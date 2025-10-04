@@ -8,6 +8,7 @@ from components.historical_trends import render_historical_trends
 from components.industry_benchmarking import render_industry_benchmarking
 from components.export_reports import render_export_options
 from components.custom_metrics import render_custom_metrics
+from components.saved_sets import render_saved_sets_manager, render_saved_sets_page
 from utils.financial_data import get_company_data, get_financial_metrics
 from utils.calculations import calculate_percentage_differences
 
@@ -33,6 +34,9 @@ st.markdown("Compare key financial metrics and performance across peer companies
 with st.sidebar:
     st.header("🏢 Company Selection")
     selected_companies = render_company_selector()
+    
+    # Render saved sets manager
+    render_saved_sets_manager()
 
 # Main content area
 if len(selected_companies) < 2:
@@ -93,11 +97,12 @@ else:
         render_export_options(comparison_data)
         
         # Create tabs for different analysis views
-        analysis_tab1, analysis_tab2, analysis_tab3, analysis_tab4 = st.tabs([
+        analysis_tab1, analysis_tab2, analysis_tab3, analysis_tab4, analysis_tab5 = st.tabs([
             "📊 Current Comparison", 
             "📈 Historical Trends",
             "🏭 Industry Benchmarking",
-            "🧮 Custom Metrics"
+            "🧮 Custom Metrics",
+            "💾 Saved Sets"
         ])
         
         with analysis_tab1:
@@ -142,6 +147,10 @@ else:
         with analysis_tab4:
             # Display custom metrics
             render_custom_metrics(comparison_data)
+        
+        with analysis_tab5:
+            # Display saved sets management
+            render_saved_sets_page(comparison_data)
     
     elif len(comparison_data) == 1:
         st.info("Only one company's data was successfully fetched. Please add more companies for comparison.")

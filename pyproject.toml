@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.3.3",
     "pillow>=11.3.0",
     "plotly>=6.3.1",
+    "psycopg2-binary>=2.9.10",
     "streamlit>=1.50.0",
     "yfinance>=0.2.66",
 ]
