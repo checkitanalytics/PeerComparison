@@ -248,13 +248,21 @@ def index():
         }
 
         function displayResults(data, tickers) {
+            const validTickers = tickers.filter(ticker => data[ticker] && !data[ticker].error && data[ticker]['Total Revenue']);
+            
+            if (validTickers.length === 0) {
+                showError('No valid data found for any companies. Please try different tickers.');
+                return;
+            }
+
             const quarters = new Set();
-            Object.values(data).forEach(company => {
-                if (company['Total Revenue']) {
-                    Object.keys(company['Total Revenue']).forEach(q => quarters.add(q));
+            validTickers.forEach(ticker => {
+                if (data[ticker]['Total Revenue']) {
+                    Object.keys(data[ticker]['Total Revenue']).forEach(q => quarters.add(q));
                 }
             });
             const sortedQuarters = Array.from(quarters).sort().reverse().slice(0, 5);
+            const latestQuarter = sortedQuarters[0] || 'N/A';
 
             const resultsDiv = document.getElementById('results');
             resultsDiv.innerHTML = `
@@ -267,18 +275,18 @@ def index():
                     <canvas id="marginChart" height="80"></canvas>
                 </div>
                 <div class="bg-white rounded-lg shadow-xl p-6 overflow-x-auto">
-                    <h3 class="text-2xl font-semibold text-gray-800 mb-4">Latest Quarter Metrics</h3>
+                    <h3 class="text-2xl font-semibold text-gray-800 mb-4">${latestQuarter} Metrics</h3>
                     <table class="w-full" id="metricsTable"></table>
                 </div>
             `;
             resultsDiv.classList.remove('hidden');
 
-            createCharts(data, tickers, sortedQuarters);
-            createTable(data, tickers, sortedQuarters);
+            createCharts(data, validTickers, sortedQuarters);
+            createTable(data, validTickers, sortedQuarters);
         }
 
         function createCharts(data, tickers, quarters) {
-            const colors = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042'];
+            const colors = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#a4de6c', '#d0ed57'];
             
             // Revenue Chart
             const revenueData = {
@@ -286,7 +294,7 @@ def index():
                 datasets: tickers.map((ticker, idx) => ({
                     label: ticker,
                     data: quarters.map(q => (data[ticker]['Total Revenue']?.[q] || 0) / 1000000000),
-                    backgroundColor: colors[idx]
+                    backgroundColor: colors[idx % colors.length]
                 }))
             };
 
@@ -309,8 +317,8 @@ def index():
                 datasets: tickers.map((ticker, idx) => ({
                     label: ticker,
                     data: quarters.map(q => data[ticker]['Gross Margin %']?.[q] || 0),
-                    borderColor: colors[idx],
-                    backgroundColor: colors[idx],
+                    borderColor: colors[idx % colors.length],
+                    backgroundColor: colors[idx % colors.length],
                     fill: false
                 }))
             };
