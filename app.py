@@ -668,6 +668,73 @@ def api_resolve():
         return jsonify({"error": str(e)}), 500
 
 
+def validate_ticker(ticker_input: str) -> str:
+    """
+    Validate and normalize a ticker symbol.
+    If the input looks like a company name, try to get the actual ticker.
+    Returns the validated ticker symbol or the original input if validation fails.
+    """
+    ticker_input = ticker_input.strip().upper()
+    
+    # First, try to validate with yfinance by checking if it has quarterly data
+    try:
+        test_ticker = yf.Ticker(ticker_input)
+        # Check if it has quarterly income data (a good indicator of a valid ticker)
+        income_data = test_ticker.quarterly_income_stmt
+        if income_data is not None and not income_data.empty:
+            # Valid ticker with data - return it
+            return ticker_input
+    except Exception:
+        pass
+    
+    # No valid data found - try to resolve as a company name
+    # This handles cases like "RIVIAN" -> "RIVN"
+    try:
+        resolved = resolve_input_to_ticker(ticker_input)
+        if resolved.get('ticker') and resolved['ticker'] != ticker_input:
+            candidate = resolved['ticker']
+            # Verify the resolved ticker actually has data
+            try:
+                verify_ticker = yf.Ticker(candidate)
+                verify_data = verify_ticker.quarterly_income_stmt
+                if verify_data is not None and not verify_data.empty:
+                    print(f"[validate] Resolved '{ticker_input}' -> '{candidate}'")
+                    return candidate
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    # Try common abbreviation patterns (e.g., "RIVIAN" -> "RIVN")
+    if len(ticker_input) >= 5:
+        abbreviations = [
+            ticker_input[:4],  # First 4 chars: RIVIAN -> RIVI
+            ticker_input[:5],  # First 5 chars: RIVIAN -> RIVIA
+            ticker_input[:3],  # First 3 chars: RIVIAN -> RIV
+        ]
+        for abbr in abbreviations:
+            try:
+                test_ticker = yf.Ticker(abbr)
+                income_data = test_ticker.quarterly_income_stmt
+                if income_data is not None and not income_data.empty:
+                    # Verify it's the right company by checking the name
+                    info = test_ticker.info
+                    if info and 'longName' in info:
+                        company_name = info['longName'].upper()
+                        # Check if the input string appears in the company name
+                        # E.g., "RIVIAN" should appear in "RIVIAN AUTOMOTIVE, INC."
+                        input_clean = ticker_input.replace(' ', '')
+                        if input_clean in company_name.replace(' ', '').replace(',', '').replace('.', ''):
+                            print(f"[validate] Abbreviated '{ticker_input}' -> '{abbr}'")
+                            return abbr
+            except Exception:
+                continue
+    
+    # If nothing worked, return original
+    print(f"[validate] Could not validate '{ticker_input}', using as-is")
+    return ticker_input
+
+
 @app.route('/api/find-peers', methods=['POST'])
 def find_peers():
     """Use OpenAI API to find peer companies"""
@@ -682,7 +749,7 @@ def find_peers():
             messages=[
                 {"role": "system", "content": "You are a financial analyst. Respond only with valid JSON."},
                 {"role": "user", "content": f'''Given ticker "{ticker}", identify 3 peer companies with similar market cap and industry.
-Respond ONLY with valid JSON:
+Respond ONLY with valid JSON using actual ticker symbols (not company names):
 {{
   "primary_company": "{ticker}",
   "industry": "industry name",
@@ -691,7 +758,8 @@ Respond ONLY with valid JSON:
     {{"ticker": "TICKER2", "name": "Company Name 2"}},
     {{"ticker": "TICKER3", "name": "Company Name 3"}}
   ]
-}}'''}
+}}
+IMPORTANT: Use only valid stock ticker symbols (e.g., RIVN not RIVIAN, TSLA not TESLA).'''}
             ],
             temperature=0.3,
             max_tokens=400
@@ -701,6 +769,17 @@ Respond ONLY with valid JSON:
         # Clean up accidental code fences if present
         response_text = response_text.replace('```json', '').replace('```', '').strip()
         peer_data = json.loads(response_text)
+        
+        # Validate and normalize all peer tickers
+        if 'peers' in peer_data:
+            for peer in peer_data['peers']:
+                if 'ticker' in peer:
+                    original_ticker = peer['ticker']
+                    validated_ticker = validate_ticker(original_ticker)
+                    if validated_ticker != original_ticker:
+                        print(f"[find-peers] Corrected peer ticker: {original_ticker} -> {validated_ticker}")
+                    peer['ticker'] = validated_ticker
+        
         return jsonify(peer_data)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
