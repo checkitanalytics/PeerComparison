@@ -661,9 +661,9 @@ def index():
       <h1 class="text-4xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
       <p class="text-gray-600 mb-6">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
-      <!-- Search boxes and buttons in one row -->
+      <!-- Search boxes and buttons - responsive layout -->
       <div class="mb-6">
-        <div class="flex gap-3 items-center">
+        <div class="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
           <input type="text" id="tickerInput" placeholder="e.g., TSLA or Tesla"
             class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-lg">
           <button onclick="resolveAndFind()" id="findButton"
