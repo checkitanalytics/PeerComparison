@@ -212,9 +212,9 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
             time.sleep(0.5)
 
             try:
-                income_quarterly = stock.quarterly_income_stmt or pd.DataFrame()
+                income_quarterly = stock.quarterly_income_stmt if stock.quarterly_income_stmt is not None else pd.DataFrame()
                 time.sleep(0.2)
-                cash_flow_quarterly = stock.quarterly_cashflow or pd.DataFrame()
+                cash_flow_quarterly = stock.quarterly_cashflow if stock.quarterly_cashflow is not None else pd.DataFrame()
             except Exception as fetch_error:
                 if "429" in str(fetch_error) and attempt < max_retries - 1:
                     print("[metrics] rate-limited, retrying…")
