@@ -13,6 +13,8 @@ from functools import lru_cache
 
 import pandas as pd
 import yfinance as yf
+import requests, re
+
 
 # Optional: boto3 if AWS creds are provided (for S3 ticker map)
 try:
@@ -378,11 +380,14 @@ def _ensure_yf_session_headers(t: yf.Ticker):
 
 @lru_cache(maxsize=128)
 def calculate_metrics(ticker: str, max_retries: int = 3):
-    """Calculate key financial metrics for a given ticker with retry logic (cached)"""
+    """Calculate key financial metrics for a given ticker with retry logic (cached).
+       Falls back to Perplexity API if yfinance data is unavailable after retries.
+    """
     ticker = (ticker or "").upper().strip()
     if not ticker:
         return None
 
+    # ---------- Primary path: yfinance ----------
     for attempt in range(max_retries):
         try:
             print(f"[metrics] {ticker} (attempt {attempt + 1}/{max_retries})")
@@ -397,20 +402,26 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
             try:
                 income_quarterly = stock.quarterly_income_stmt if stock.quarterly_income_stmt is not None else pd.DataFrame()
                 time.sleep(0.2)
-                cash_flow_quarterly = stock.quarterly_cashflow if stock.quarterly_cashflow is not None else pd.DataFrame()
+                cash_flow_quarterly = stock.quarterly_cashflow   if stock.quarterly_cashflow   is not None else pd.DataFrame()
             except Exception as fetch_error:
+                # If rate-limited, retry; otherwise fall through to fallback after retries
                 if "429" in str(fetch_error) and attempt < max_retries - 1:
                     print("[metrics] rate-limited, retrying…")
                     continue
                 print(f"[metrics] fetch error for {ticker}: {fetch_error}")
-                return None
+                # try next attempt (if any) before falling back
+                if attempt < max_retries - 1:
+                    continue
+                # break to fallback
+                break
 
             if income_quarterly.empty or cash_flow_quarterly.empty:
                 if attempt < max_retries - 1:
                     print(f"[metrics] empty frames for {ticker}, retrying…")
                     continue
-                print(f"[metrics] no data for {ticker}")
-                return None
+                print(f"[metrics] no data for {ticker} from yfinance")
+                # break to fallback
+                break
 
             # Compute derived rows if needed
             if "Gross Profit" in income_quarterly.index:
@@ -451,9 +462,14 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
 
             result = pd.concat([filtered_income, filtered_cash_flow], axis=0)
             if result.empty:
-                return None
+                # try another attempt if available; else fall back
+                if attempt < max_retries - 1:
+                    print(f"[metrics] empty result frame for {ticker}, retrying…")
+                    continue
+                print(f"[metrics] empty result for {ticker} from yfinance")
+                break
 
-            # Pretty quarter labels
+            # Pretty quarter labels like '2024Q2'
             result.columns = result.columns.to_period("Q").astype(str)
 
             result_dict = {}
@@ -471,8 +487,20 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
 
         except Exception as e:
             print(f"[metrics] error {ticker}: {e}")
-            return None
+            # if there are more attempts, loop; else break to fallback
+            if attempt < max_retries - 1:
+                continue
+            break
+
+    # ---------- Fallback: Perplexity API ----------
+    fb = perplexity_fallback_metrics(ticker, max_quarters=5)
+    if fb:
+        print(f"[metrics:fallback] Perplexity used for {ticker}")
+        return fb
+
+    print(f"[metrics] no data for {ticker} (yfinance + fallback failed)")
     return None
+
 
 
 # ============================================================
@@ -510,6 +538,21 @@ EVTOL_GROUP = [
     {"ticker": "BLDE",  "name": "Blade Air Mobility, Inc."},
 ]
 EVTOL_TICKERS = {x["ticker"] for x in EVTOL_GROUP}
+
+# EV (Electric Vehicle) group
+EV_GROUP = [
+    {"ticker": "RIVN",  "name": "Rivian Automotive, Inc."},
+    {"ticker": "LCID",  "name": "Lucid Group, Inc."},
+    {"ticker": "NIO",   "name": "NIO Inc."},
+    {"ticker": "XPEV",  "name": "XPeng Inc."},
+    {"ticker": "LI",    "name": "Li Auto Inc."},
+    {"ticker": "ZK",    "name": "ZEEKR Intelligent Technology Holding Limited"},
+    {"ticker": "PSNY",  "name": "Polestar Automotive Holding UK PLC"},
+    {"ticker": "BYDDY", "name": "BYD Company Limited"},
+    {"ticker": "VFS",   "name": "VinFast Auto Ltd."},
+    {"ticker": "WKHS",  "name": "Workhorse Group Inc."},
+]
+EV_TICKERS = {x["ticker"] for x in EV_GROUP}
 
 # Tunables
 PEER_LIMIT = 6
@@ -579,6 +622,169 @@ def fetch_profile(ticker: str, max_retries: int = 2) -> dict:
 
     return {"ticker": t, "name": name, "industry": industry, "market_cap": market_cap}
 
+# ---------- Perplexity fallback helpers ----------
+
+def _parse_quarter_label(q: str):
+    """Parse 'YYYYQn' -> (YYYY, n) for sorting; return None if invalid."""
+    if not q:
+        return None
+    m = re.match(r'^(\d{4})Q([1-4])$', q.strip().upper())
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)))
+
+def _clean_fallback_payload(obj: dict, max_quarters: int = 5) -> dict | None:
+    """
+    Validate/normalize Perplexity JSON into the same shape calculate_metrics returns:
+      { metric: { 'YYYYQn': number, ... }, ... }
+    - Monetary metrics: int dollars (no commas/abbrevs)
+    - Percent metric: float (no % sign)
+    - Keep only the most recent `max_quarters` by quarter label
+    """
+    if not isinstance(obj, dict):
+        return None
+
+    METRICS = [
+        "Total Revenue",
+        "Operating Expense",
+        "Gross Margin %",
+        "EBIT",
+        "Net Income",
+        "Free Cash Flow",
+    ]
+
+    # Union all quarter labels present across metrics
+    quarters = set()
+    for m in METRICS:
+        md = obj.get(m, {})
+        if isinstance(md, dict):
+            for q in md.keys():
+                if _parse_quarter_label(q):
+                    quarters.add(q)
+
+    if not quarters:
+        return None
+
+    # Sort by time (oldest -> newest) and take the last N
+    sorted_quarters = sorted(quarters, key=lambda q: _parse_quarter_label(q))
+    keep = set(sorted_quarters[-max_quarters:])
+
+    cleaned = {}
+    for m in METRICS:
+        src = obj.get(m, {})
+        if not isinstance(src, dict):
+            continue
+        dst = {}
+        for q, v in src.items():
+            if q not in keep:
+                continue
+            if v is None:
+                continue
+            try:
+                if m == "Gross Margin %":
+                    # strip any '%' and cast to float
+                    if isinstance(v, str) and v.endswith('%'):
+                        v = v[:-1]
+                    dst[q] = float(v)
+                else:
+                    # monetary values -> int dollars
+                    if isinstance(v, str):
+                        v = v.replace(',', '').replace('$', '')
+                    # Some LLMs return in millions/billions; if you want to force-detect units,
+                    # add heuristics here. For now we assume absolute USD amounts.
+                    dst[q] = int(float(v))
+            except Exception:
+                # skip bad cells
+                continue
+        if dst:
+            cleaned[m] = dst
+
+    return cleaned or None
+
+
+def perplexity_fallback_metrics(ticker: str, max_quarters: int = 5) -> dict | None:
+    """
+    Query Perplexity's OpenAI-compatible API for last up to 5 quarterly values
+    for our metrics. Returns the same dict shape used by calculate_metrics, or None.
+
+    Env vars:
+      PERPLEXITY_API_KEY (required for fallback)
+      PERPLEXITY_API_MODEL (optional, default 'sonar-small')
+      PERPLEXITY_API_BASE (optional, default 'https://api.perplexity.ai/chat/completions')
+    """
+    api_key = os.environ.get("PERPLEXITY_API_KEY")
+    if not api_key:
+        return None
+
+    base_url = os.environ.get("PERPLEXITY_API_BASE", "https://api.perplexity.ai/chat/completions")
+    model = os.environ.get("PERPLEXITY_API_MODEL", "sonar-small")
+
+    system_msg = (
+        "You are a finance data extraction assistant. "
+        "Return ONLY strict JSON (no markdown) in the exact schema requested."
+    )
+    user_msg = f"""
+For the public company with stock ticker "{ticker}", provide the most recent up to {max_quarters} fiscal quarters
+for the following metrics in USD (nominal), using quarter keys EXACTLY in 'YYYYQn' format (e.g., 2024Q2):
+
+- Total Revenue
+- Operating Expense
+- Gross Margin %
+- EBIT
+- Net Income
+- Free Cash Flow (define as Operating Cash Flow + Capital Expenditure; capex is usually negative)
+
+Rules:
+- Return ONLY JSON, no extra text.
+- Monetary values MUST be absolute dollars (no words like "million" or "billion", no commas, no $).
+- Percent must be a bare number (e.g., 18.5 for 18.5%).
+- If a value is unknown, omit that quarter for that metric (do not write null).
+- Use the most recent quarters available from reliable sources (10-Q/10-K/company filings).
+
+Schema:
+{{
+  "Total Revenue": {{"YYYYQn": 0, "...": 0}},
+  "Operating Expense": {{"YYYYQn": 0}},
+  "Gross Margin %": {{"YYYYQn": 0.0}},
+  "EBIT": {{"YYYYQn": 0}},
+  "Net Income": {{"YYYYQn": 0}},
+  "Free Cash Flow": {{"YYYYQn": 0}}
+}}
+"""
+
+    try:
+        resp = requests.post(
+            base_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "temperature": 0.1,
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+            },
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            print(f"[perplexity] HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # Clean accidental code fences
+        content = content.strip().replace("```json", "").replace("```", "")
+        parsed = json.loads(content)
+        cleaned = _clean_fallback_payload(parsed, max_quarters=max_quarters)
+        if not cleaned:
+            print("[perplexity] could not validate payload")
+        return cleaned
+    except Exception as e:
+        print(f"[perplexity] error: {e}")
+        return None
 
 # ============================================================
 # STEP 2: Candidate Generators (S3 + optional OpenAI)
@@ -1095,6 +1301,15 @@ def find_peers():
                 "peers": peers
             })
 
+        # --- Special: EV (Electric Vehicle)
+        if base_ticker in EV_TICKERS:
+            peers = [p for p in EV_GROUP if p["ticker"] != base_ticker]
+            return jsonify({
+                "primary_company": base_prof["ticker"],
+                "industry": base_ind or "N/A",
+                "peers": peers
+            })
+
         # --- Candidate pool (merge S3 + OpenAI, then unique) ---
         cand = _s3_universe_candidates(base_ticker, base_ind or "", limit=120)
         more = _openai_candidates(base_ticker, count=16)
@@ -1171,6 +1386,7 @@ def health():
     return jsonify({
         'status': 'healthy',
         'openai_configured': bool(os.environ.get('OPENAI_API_KEY')),
+        'perplexity_configured': bool(os.environ.get('PERPLEXITY_API_KEY')),  # <-- add this
         's3_loaded': _s3_loaded,
         's3_error': _s3_error,
         'ticker_map_counts': {
@@ -1178,6 +1394,7 @@ def health():
             'name_to_ticker': len(_name_to_ticker)
         }
     })
+
 
 
 if __name__ == '__main__':
