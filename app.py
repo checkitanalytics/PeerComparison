@@ -404,7 +404,10 @@ def index():
 
         // Initialize global state
         _metricsData = metricsData;
-        _tickers = tickers.filter(t => metricsData[t] && !metricsData[t].error && metricsData[t]['Total Revenue']);
+        // Always include primary company, filter peers only
+        const primaryTicker = peerData.primary_company;
+        const validPeers = tickers.slice(1).filter(t => metricsData[t] && !metricsData[t].error && metricsData[t]['Total Revenue']);
+        _tickers = [primaryTicker, ...validPeers];
         _quarters = computeQuarters(metricsData, _tickers);
 
         renderAll();
@@ -524,7 +527,7 @@ def index():
       
       const datasetsRevenue = _tickers.map((t, i) => ({
         label: t + ' Revenue',
-        data: labels.map(q => ((_metricsData[t]['Total Revenue']?.[q] || 0) / 1_000_000_000)),
+        data: labels.map(q => (((_metricsData[t] || {})['Total Revenue']?.[q] || 0) / 1_000_000_000)),
         backgroundColor: COLORS[i % COLORS.length],
         type: 'bar',
         yAxisID: 'y'
@@ -532,7 +535,7 @@ def index():
 
       const datasetsMargin = _tickers.map((t, i) => ({
         label: t + ' Margin %',
-        data: labels.map(q => (_metricsData[t]['Gross Margin %']?.[q] || 0)),
+        data: labels.map(q => ((_metricsData[t] || {})['Gross Margin %']?.[q] || 0)),
         borderColor: COLORS[i % COLORS.length],
         backgroundColor: COLORS[i % COLORS.length],
         type: 'line',
