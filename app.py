@@ -150,10 +150,184 @@ def _load_ticker_map_from_s3():
 _load_ticker_map_from_s3()
 
 
+def _verify_ticker_with_yfinance(ticker: str) -> dict:
+    """
+    Verify if a ticker is valid using yfinance and return its info.
+    Returns: {"ticker": "TSLA", "name": "Tesla, Inc."} or None
+    """
+    try:
+        t = ticker.upper().strip()
+        stock = yf.Ticker(t)
+        _ensure_yf_session_headers(stock)
+        
+        # Try to get basic info
+        info = stock.get_info() or {}
+        long_name = info.get("longName") or info.get("shortName")
+        
+        # If we got a name, consider it valid
+        if long_name:
+            return {"ticker": t, "name": long_name}
+        
+        # Check if there's any data available
+        if info.get("symbol") == t:
+            return {"ticker": t, "name": None}
+            
+        return None
+    except Exception:
+        return None
+
+
+def _search_ticker_with_openai(company_name: str) -> dict:
+    """
+    Use OpenAI to resolve a company name to a ticker symbol.
+    Returns: {"ticker": "TSLA", "name": "Tesla, Inc."} or None
+    """
+    try:
+        prompt = f"""
+You are a stock ticker expert. Given the company name "{company_name}", return ONLY the stock ticker symbol and full company name.
+If it's a publicly-traded company, respond with JSON: {{"ticker":"SYMBOL","name":"Full Company Name"}}
+If it's a private company or doesn't exist, respond with: {{"error":"Private or not found"}}
+
+Company name: {company_name}
+"""
+        response = client.chat.completions.create(
+            model="gpt-4",
+            temperature=0.0,
+            max_tokens=100,
+            messages=[
+                {"role": "system", "content": "Respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        raw = response.choices[0].message.content.strip().replace("```json", "").replace("```", "")
+        obj = json.loads(raw)
+        
+        if obj.get("error"):
+            return None
+        
+        ticker = obj.get("ticker", "").upper().strip()
+        name = obj.get("name", "").strip()
+        
+        if not ticker:
+            return None
+        
+        # Verify the ticker with yfinance
+        verified = _verify_ticker_with_yfinance(ticker)
+        if verified:
+            return verified
+        
+        return None
+    except Exception:
+        return None
+
+
+def _search_ticker_with_yfinance(query: str) -> dict:
+    """
+    Search for a ticker using company name via yfinance.
+    Returns: {"ticker": "TSLA", "name": "Tesla, Inc."} or None
+    """
+    if not query:
+        return None
+    
+    # Common company name to ticker mappings (fast lookup for known companies)
+    common_mappings = {
+        "tesla": "TSLA",
+        "apple": "AAPL",
+        "microsoft": "MSFT",
+        "amazon": "AMZN",
+        "google": "GOOGL",
+        "alphabet": "GOOGL",
+        "meta": "META",
+        "facebook": "META",
+        "nvidia": "NVDA",
+        "netflix": "NFLX",
+        "twitter": "TWTR",
+        "x corp": "TWTR",
+        "boeing": "BA",
+        "airbus": "AIR.PA",
+        "intel": "INTC",
+        "amd": "AMD",
+        "walmart": "WMT",
+        "disney": "DIS",
+        "coca cola": "KO",
+        "pepsi": "PEP",
+        "mcdonalds": "MCD",
+        "starbucks": "SBUX",
+        "visa": "V",
+        "mastercard": "MA",
+        "jpmorgan": "JPM",
+        "jp morgan": "JPM",
+        "bank of america": "BAC",
+        "wells fargo": "WFC",
+        "goldman sachs": "GS",
+        "morgan stanley": "MS",
+        "berkshire hathaway": "BRK.B",
+        "exxon": "XOM",
+        "chevron": "CVX",
+        "pfizer": "PFE",
+        "johnson & johnson": "JNJ",
+        "johnson and johnson": "JNJ",
+        "unitedhealth": "UNH",
+        "procter & gamble": "PG",
+        "procter and gamble": "PG",
+        "home depot": "HD",
+        "salesforce": "CRM",
+        "adobe": "ADBE",
+        "cisco": "CSCO",
+        "oracle": "ORCL",
+        "ibm": "IBM",
+        "paypal": "PYPL",
+        "uber": "UBER",
+        "lyft": "LYFT",
+        "airbnb": "ABNB",
+        "zoom": "ZM",
+        "slack": "WORK",
+        "spotify": "SPOT",
+        "snapchat": "SNAP",
+        "pinterest": "PINS",
+        "square": "SQ",
+        "robinhood": "HOOD",
+        "coinbase": "COIN",
+        "snowflake": "SNOW",
+        "palantir": "PLTR",
+        "databricks": None,  # Private
+        "spacex": None,  # Private company
+        "stripe": None,  # Private company
+    }
+    
+    # Normalize the query
+    norm = query.strip().lower()
+    
+    # Check common mappings first (fast path)
+    if norm in common_mappings:
+        ticker = common_mappings[norm]
+        if ticker:
+            # Verify and get name
+            result = _verify_ticker_with_yfinance(ticker)
+            if result:
+                return result
+        else:
+            return None  # Private company
+    
+    # Try as-is if it looks like a ticker
+    if len(query) <= 6 and query.isalpha():
+        result = _verify_ticker_with_yfinance(query)
+        if result:
+            return result
+    
+    # For multi-word company names, try OpenAI as fallback
+    if ' ' in query or len(query) > 6:
+        result = _search_ticker_with_openai(query)
+        if result:
+            return result
+    
+    return None
+
+
 def resolve_input_to_ticker(user_input: str) -> dict:
     """
     Resolves arbitrary user input (ticker or company name) to a canonical ticker.
-    Returns: { "input": "...", "ticker": "TSLA", "name": "Tesla, Inc.", "source": "s3|guess|input" }
+    Returns: { "input": "...", "ticker": "TSLA", "name": "Tesla, Inc.", "source": "s3|guess|input|yfinance" }
     """
     raw = (user_input or "").strip()
     if not raw:
@@ -171,12 +345,21 @@ def resolve_input_to_ticker(user_input: str) -> dict:
         t = raw.upper()
         return {"input": raw, "ticker": t, "name": _ticker_to_name.get(t), "source": "s3"}
 
-    # 3) Fallback: if they typed something that *looks* like a ticker, try it
+    # 3) Try yfinance search to resolve company name to ticker
+    yf_result = _search_ticker_with_yfinance(raw)
+    if yf_result:
+        return {"input": raw, "ticker": yf_result["ticker"], "name": yf_result.get("name"), "source": "yfinance"}
+
+    # 4) Fallback: if they typed something that *looks* like a ticker, try it
     if raw.isalpha() and 1 <= len(raw) <= 6:
         t = raw.upper()
+        # Verify it's a valid ticker using yfinance
+        verified = _verify_ticker_with_yfinance(t)
+        if verified:
+            return {"input": raw, "ticker": verified["ticker"], "name": verified.get("name"), "source": "input"}
         return {"input": raw, "ticker": t, "name": _ticker_to_name.get(t), "source": "input"}
 
-    # 4) Last resort: return input back, client can decide to proceed
+    # 5) Last resort: return input back, client can decide to proceed
     return {"input": raw, "ticker": raw.upper(), "name": _ticker_to_name.get(raw.upper()), "source": "guess"}
 
 
