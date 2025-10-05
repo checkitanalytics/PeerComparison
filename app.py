@@ -212,9 +212,9 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
             time.sleep(0.5)
 
             try:
-                income_quarterly = stock.quarterly_income_stmt if stock.quarterly_income_stmt is not None else pd.DataFrame()
+                income_quarterly = stock.quarterly_income_stmt or pd.DataFrame()
                 time.sleep(0.2)
-                cash_flow_quarterly = stock.quarterly_cashflow if stock.quarterly_cashflow is not None else pd.DataFrame()
+                cash_flow_quarterly = stock.quarterly_cashflow or pd.DataFrame()
             except Exception as fetch_error:
                 if "429" in str(fetch_error) and attempt < max_retries - 1:
                     print("[metrics] rate-limited, retrying…")
@@ -297,7 +297,7 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
 # -----------------------------
 @app.route("/")
 def index():
-    """Serve the main HTML page"""
+    """Serve the main HTML page (now with manual add-company support)"""
     return '''
 <!DOCTYPE html>
 <html lang="en">
@@ -314,30 +314,64 @@ def index():
       <h1 class="text-4xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
       <p class="text-gray-600 mb-6">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
-      <div class="flex gap-4 mb-6">
-        <input type="text" id="tickerInput" placeholder="e.g., TSLA or Tesla"
-          class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-lg">
-        <button onclick="resolveAndFind()" id="findButton"
-          class="px-8 py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors">
-          Find Peers
-        </button>
+      <!-- Find peers -->
+      <div class="flex flex-col gap-3 mb-6">
+        <div class="flex gap-4">
+          <input type="text" id="tickerInput" placeholder="e.g., TSLA or Tesla"
+            class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-lg">
+          <button onclick="resolveAndFind()" id="findButton"
+            class="px-8 py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors">
+            Find Peers
+          </button>
+        </div>
+
+        <!-- NEW: Manually add a company to compare -->
+        <div class="flex gap-4 items-center">
+          <input type="text" id="manualInput" placeholder="Add company (ticker or name)"
+            class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-lg">
+          <button onclick="addCompany()" id="addButton"
+            class="px-6 py-3 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-gray-400 transition-colors">
+            Add company
+          </button>
+        </div>
+        <p class="text-sm text-gray-500 -mt-1">Tip: Try adding AAPL, MSFT, AMZN, etc.</p>
       </div>
 
       <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-4 mb-6"><p class="text-red-700"></p></div>
       <div id="loading" class="hidden text-center py-4">
         <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-        <p class="mt-2 text-gray-600">Resolving input, analyzing peers, and fetching data...</p>
+        <p class="mt-2 text-gray-600">Working…</p>
       </div>
       <div id="peerInfo" class="hidden bg-indigo-50 rounded-lg p-6 mb-8"></div>
     </div>
+
     <div id="results" class="hidden space-y-8"></div>
   </div>
 
   <script>
+    // ---------- Global state ----------
+    let _metricsData = {};         // ticker -> metrics dict
+    let _tickers = [];             // ordered list for charts/tables
+    let _quarters = [];            // sorted newest->oldest (max 5)
+    let _combinedChart = null;
+
+    const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#a4de6c', '#d0ed57', '#8dd1e1', '#a28dd1'];
+
+    // ---------- Utilities ----------
+    function showError(msg){ const d=document.getElementById('error'); d.querySelector('p').textContent=msg; d.classList.remove('hidden'); }
+    function hideError(){ document.getElementById('error').classList.add('hidden'); }
+    function showLoading(b){
+      document.getElementById('loading').classList.toggle('hidden',!b);
+      document.getElementById('findButton').disabled=b;
+      document.getElementById('addButton').disabled=b;
+    }
+
+    function uniqLower(arr){ const s=new Set(); const out=[]; for(const x of arr){const y=(x||'').toUpperCase(); if(!s.has(y)){s.add(y); out.push(y);} } return out; }
+
+    // ---------- Initial peer flow ----------
     async function resolveAndFind() {
       const raw = document.getElementById('tickerInput').value.trim();
       if (!raw) return showError('Please enter a ticker or company name');
-
       showLoading(true); hideError();
       document.getElementById('peerInfo').classList.add('hidden');
       document.getElementById('results').classList.add('hidden');
@@ -348,34 +382,34 @@ def index():
         const res = await r.json();
         if (res.error) throw new Error(res.error);
 
-        // Proceed with the resolved ticker
         await findPeers(res.ticker, res.name);
-      } catch (err) {
-        showError(err.message);
-      } finally {
-        showLoading(false);
-      }
+      } catch (err) { showError(err.message); }
+      finally { showLoading(false); }
     }
 
     async function findPeers(ticker, name) {
       try {
         showLoading(true);
-        const response = await fetch('/api/find-peers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker }) });
+        const response = await fetch('/api/find-peers', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker })
+        });
         if (!response.ok) throw new Error('Failed to find peers');
         const peerData = await response.json();
-
-        // Attach pretty name (if we had it)
-        if (name && peerData && peerData.primary_company === ticker) {
-          peerData.primary_name = name;
-        }
+        if (name && peerData && peerData.primary_company === ticker) peerData.primary_name = name;
 
         displayPeers(peerData);
-        await fetchMetrics(peerData);
-      } catch (err) {
-        showError(err.message);
-      } finally {
-        showLoading(false);
-      }
+
+        const tickers = [peerData.primary_company, ...peerData.peers.map(p => p.ticker)];
+        const metricsData = await fetchMetricsForTickers(tickers);
+
+        // Initialize global state
+        _metricsData = metricsData;
+        _tickers = tickers.filter(t => metricsData[t] && !metricsData[t].error && metricsData[t]['Total Revenue']);
+        _quarters = computeQuarters(metricsData, _tickers);
+
+        renderAll();
+      } catch (err) { showError(err.message); }
+      finally { showLoading(false); }
     }
 
     function displayPeers(data) {
@@ -400,94 +434,174 @@ def index():
       document.getElementById('peerInfo').classList.remove('hidden');
     }
 
-    async function fetchMetrics(peerData) {
-      const tickers = [peerData.primary_company, ...peerData.peers.map(p => p.ticker)];
-      const response = await fetch('/api/get-metrics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tickers }) });
-      if (!response.ok) throw new Error('Failed to fetch metrics');
-      const metricsData = await response.json();
-      displayResults(metricsData, tickers);
+    // ---------- Manual add flow ----------
+    async function addCompany() {
+      const raw = document.getElementById('manualInput').value.trim();
+      if (!raw) return showError('Please enter a ticker or company name to add.');
+      hideError();
+      try {
+        showLoading(true);
+        // Resolve to a ticker
+        const r = await fetch('/api/resolve', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ input: raw }) });
+        if (!r.ok) throw new Error('Failed to resolve input');
+        const res = await r.json();
+        if (res.error) throw new Error(res.error);
+        const newTicker = (res.ticker || '').toUpperCase();
+
+        if (!newTicker) throw new Error('Could not resolve to a ticker.');
+        if (_tickers.includes(newTicker)) {
+          return showError(`${newTicker} is already included.`);
+        }
+
+        // Fetch metrics only for the new ticker
+        const oneMetrics = await fetchMetricsForTickers([newTicker]);
+        if (!oneMetrics[newTicker] || oneMetrics[newTicker].error || !oneMetrics[newTicker]['Total Revenue']) {
+          return showError(`No usable data for ${newTicker}.`);
+        }
+
+        // Merge into global state
+        _metricsData[newTicker] = oneMetrics[newTicker];
+        _tickers.push(newTicker);
+        _tickers = uniqLower(_tickers);
+
+        // Recompute unified quarter set (top 5 newest)
+        _quarters = computeQuarters(_metricsData, _tickers);
+
+        // Re-render charts & tables with the new ticker
+        renderAll();
+
+        // Clear input
+        document.getElementById('manualInput').value = '';
+        document.getElementById('results').classList.remove('hidden');
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        showLoading(false);
+      }
     }
 
-    function displayResults(data, tickers) {
-      const validTickers = tickers.filter(t => data[t] && !data[t].error && data[t]['Total Revenue']);
-      if (validTickers.length === 0) return showError('No valid data found for any companies. Please try different tickers.');
-
-      const quarters = new Set();
-      validTickers.forEach(t => {
-        if (data[t]['Total Revenue']) Object.keys(data[t]['Total Revenue']).forEach(q => quarters.add(q));
+    // ---------- Data helpers ----------
+    async function fetchMetricsForTickers(tickers){
+      const response = await fetch('/api/get-metrics', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tickers })
       });
-      const sortedQuarters = Array.from(quarters).sort().reverse().slice(0, 5);
-      const latestQuarter = sortedQuarters[0] || 'N/A';
+      if (!response.ok) throw new Error('Failed to fetch metrics');
+      return await response.json();
+    }
 
+    function computeQuarters(data, tickers){
+      const qset = new Set();
+      tickers.forEach(t => {
+        const m = data[t];
+        if (m && m['Total Revenue']) Object.keys(m['Total Revenue']).forEach(q => qset.add(q));
+      });
+      return Array.from(qset).sort().reverse().slice(0,5);
+    }
+
+    // ---------- Rendering ----------
+    function renderAll(){
       const resultsDiv = document.getElementById('results');
       resultsDiv.innerHTML = `
         <div class="bg-white rounded-lg shadow-xl p-6">
-          <h3 class="text-2xl font-semibold text-gray-800 mb-4">Total Revenue Comparison</h3>
-          <canvas id="revenueChart" height="80"></canvas>
-        </div>
-        <div class="bg-white rounded-lg shadow-xl p-6">
-          <h3 class="text-2xl font-semibold text-gray-800 mb-4">Gross Margin % Trend</h3>
-          <canvas id="marginChart" height="80"></canvas>
+          <h3 class="text-2xl font-semibold text-gray-800 mb-4">Total Revenue & Gross Margin % Trend</h3>
+          <canvas id="combinedChart" height="80"></canvas>
         </div>
         <div class="bg-white rounded-lg shadow-xl p-6 overflow-x-auto">
-          <h3 class="text-2xl font-semibold text-gray-800 mb-4">${latestQuarter} Metrics</h3>
+          <h3 class="text-2xl font-semibold text-gray-800 mb-4">${_quarters[0] || 'N/A'} Metrics</h3>
           <table class="w-full" id="metricsTable"></table>
         </div>
         <div id="timeSeriesTables" class="space-y-6"></div>
       `;
       resultsDiv.classList.remove('hidden');
 
-      createCharts(data, validTickers, sortedQuarters);
-      createTable(data, validTickers, sortedQuarters);
-      createTimeSeriesTables(data, validTickers, sortedQuarters);
+      renderCharts();
+      renderTable();
+      renderTimeSeriesTables();
     }
 
-    function createCharts(data, tickers, quarters) {
-      const colors = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#a4de6c', '#d0ed57'];
-
-      const revenueData = {
-        labels: quarters,
-        datasets: tickers.map((t, i) => ({
-          label: t,
-          data: quarters.map(q => (data[t]['Total Revenue']?.[q] || 0) / 1_000_000_000),
-          backgroundColor: colors[i % colors.length]
-        }))
-      };
-      new Chart(document.getElementById('revenueChart'), {
+    function renderCharts(){
+      const labels = _quarters;
+      
+      const datasetsRevenue = _tickers.map((t, i) => ({
+        label: t + ' Revenue',
+        data: labels.map(q => ((_metricsData[t]['Total Revenue']?.[q] || 0) / 1_000_000_000)),
+        backgroundColor: COLORS[i % COLORS.length],
         type: 'bar',
-        data: revenueData,
-        options: { responsive: true, scales: { y: { ticks: { callback: v => '$' + v.toFixed(1) + 'B' } } } }
-      });
+        yAxisID: 'y'
+      }));
 
-      const marginData = {
-        labels: quarters,
-        datasets: tickers.map((t, i) => ({
-          label: t,
-          data: quarters.map(q => data[t]['Gross Margin %']?.[q] || 0),
-          borderColor: colors[i % colors.length],
-          backgroundColor: colors[i % colors.length],
-          fill: false
-        }))
-      };
-      new Chart(document.getElementById('marginChart'), {
+      const datasetsMargin = _tickers.map((t, i) => ({
+        label: t + ' Margin %',
+        data: labels.map(q => (_metricsData[t]['Gross Margin %']?.[q] || 0)),
+        borderColor: COLORS[i % COLORS.length],
+        backgroundColor: COLORS[i % COLORS.length],
         type: 'line',
-        data: marginData,
-        options: { responsive: true, scales: { y: { ticks: { callback: v => v.toFixed(1) + '%' } } } }
+        yAxisID: 'y1',
+        fill: false,
+        borderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6
+      }));
+
+      const combinedDatasets = [...datasetsRevenue, ...datasetsMargin];
+
+      if (_combinedChart) _combinedChart.destroy();
+      _combinedChart = new Chart(document.getElementById('combinedChart'), {
+        type: 'bar',
+        data: { labels, datasets: combinedDatasets },
+        options: {
+          responsive: true,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          scales: {
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Total Revenue (Billions $)'
+              },
+              ticks: {
+                callback: v => '$' + Number(v).toFixed(1) + 'B'
+              }
+            },
+            y1: {
+              type: 'linear',
+              display: true,
+              position: 'right',
+              title: {
+                display: true,
+                text: 'Gross Margin %'
+              },
+              ticks: {
+                callback: v => Number(v).toFixed(1) + '%'
+              },
+              grid: {
+                drawOnChartArea: false
+              }
+            }
+          }
+        }
       });
     }
 
-    function createTable(data, tickers, quarters) {
+    function renderTable(){
       const metrics = ['Total Revenue', 'Gross Margin %', 'Operating Expense', 'EBIT', 'Net Income', 'Free Cash Flow'];
-      const latestQ = quarters[0];
+      const latestQ = _quarters[0];
       let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-3 px-4">Metric</th>';
-      tickers.forEach(t => html += `<th class="text-right py-3 px-4">${t}</th>`); html += '</tr></thead><tbody>';
+      _tickers.forEach(t => html += `<th class="text-right py-3 px-4">${t}</th>`); html += '</tr></thead><tbody>';
 
       metrics.forEach(metric => {
         html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-3 px-4 font-medium">${metric}</td>`;
-        tickers.forEach(t => {
-          const v = data[t][metric]?.[latestQ];
+        _tickers.forEach(t => {
+          const v = (_metricsData[t] || {})[metric]?.[latestQ];
           const formatted = (v !== undefined && v !== null)
-            ? (metric === 'Gross Margin %' ? v.toFixed(2) + '%' : '$' + (v/1_000_000_000).toFixed(2) + 'B')
+            ? (metric === 'Gross Margin %'
+                ? Number(v).toFixed(2) + '%'
+                : '$' + (Number(v)/1_000_000_000).toFixed(2) + 'B')
             : 'N/A';
           html += `<td class="text-right py-3 px-4">${formatted}</td>`;
         });
@@ -498,27 +612,28 @@ def index():
       document.getElementById('metricsTable').innerHTML = html;
     }
 
-    function createTimeSeriesTables(data, tickers, quarters) {
+    function renderTimeSeriesTables(){
       const metrics = ['Total Revenue', 'Operating Expense', 'Gross Margin %', 'EBIT', 'Net Income', 'Free Cash Flow'];
       const container = document.getElementById('timeSeriesTables');
       let html = '';
-      tickers.forEach(ticker => {
+      _tickers.forEach(ticker => {
         html += `
           <div class="bg-white rounded-lg shadow-xl p-6 overflow-x-auto">
             <h3 class="text-2xl font-semibold text-gray-800 mb-4">${ticker} - 5 Quarter Time Series</h3>
             <table class="w-full">
               <thead><tr class="border-b-2 border-gray-300">
                 <th class="text-left py-3 px-4"></th>
-                ${quarters.map(q => `<th class="text-right py-3 px-4">${q}</th>`).join('')}
+                ${_quarters.map(q => `<th class="text-right py-3 px-4">${q}</th>`).join('')}
               </tr></thead>
               <tbody>`;
         metrics.forEach(metric => {
           html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-3 px-4 font-medium">${metric}</td>`;
-          quarters.forEach(q => {
-            const v = data[ticker][metric]?.[q];
+          _quarters.forEach(q => {
+            const v = (_metricsData[ticker] || {})[metric]?.[q];
             let formatted = 'N/A';
             if (v !== undefined && v !== null) {
-              formatted = (metric === 'Gross Margin %') ? v.toFixed(2) + '%' : '$' + (v/1_000_000).toFixed(1) + 'M';
+              formatted = (metric === 'Gross Margin %') ? Number(v).toFixed(2) + '%'
+                        : '$' + (Number(v)/1_000_000).toFixed(1) + 'M';
             }
             html += `<td class="text-right py-3 px-4">${formatted}</td>`;
           });
@@ -529,10 +644,9 @@ def index():
       container.innerHTML = html;
     }
 
-    function showError(msg){ const d=document.getElementById('error'); d.querySelector('p').textContent=msg; d.classList.remove('hidden'); }
-    function hideError(){ document.getElementById('error').classList.add('hidden'); }
-    function showLoading(b){ document.getElementById('loading').classList.toggle('hidden',!b); document.getElementById('findButton').disabled=b; }
+    // Enter-to-submit helpers
     document.getElementById('tickerInput').addEventListener('keypress', e => { if (e.key === 'Enter') resolveAndFind(); });
+    document.getElementById('manualInput').addEventListener('keypress', e => { if (e.key === 'Enter') addCompany(); });
   </script>
 </body>
 </html>
