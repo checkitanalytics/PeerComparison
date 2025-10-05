@@ -655,29 +655,29 @@ def index():
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
-<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-8">
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-4 md:p-8">
   <div class="max-w-7xl mx-auto">
-    <div class="bg-white rounded-lg shadow-xl p-8 mb-8">
-      <h1 class="text-4xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
-      <p class="text-gray-600 mb-6">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
+    <div class="bg-white rounded-lg shadow-xl p-4 md:p-8 mb-4 md:mb-8">
+      <h1 class="text-2xl md:text-4xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
+      <p class="text-sm md:text-base text-gray-600 mb-4 md:mb-6">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
       <!-- Search boxes and buttons - responsive layout -->
       <div class="mb-6">
         <div class="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
           <input type="text" id="tickerInput" placeholder="e.g., TSLA or Tesla"
-            class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-lg">
+            class="flex-1 px-3 md:px-4 py-2 md:py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-base md:text-lg">
           <button onclick="resolveAndFind()" id="findButton"
-            class="px-6 py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors whitespace-nowrap">
+            class="px-4 md:px-6 py-2 md:py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors whitespace-nowrap text-sm md:text-base">
             Find Peers
           </button>
           <input type="text" id="manualInput" placeholder="Add company (ticker or name)"
-            class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-lg">
+            class="flex-1 px-3 md:px-4 py-2 md:py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-base md:text-lg">
           <button onclick="addCompany()" id="addButton"
-            class="px-6 py-3 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-gray-400 transition-colors whitespace-nowrap">
+            class="px-4 md:px-6 py-2 md:py-3 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-gray-400 transition-colors whitespace-nowrap text-sm md:text-base">
             Add company
           </button>
         </div>
-        <p class="text-sm text-gray-500 mt-2">Tip: Try adding AAPL, MSFT, AMZN, etc.</p>
+        <p class="text-xs md:text-sm text-gray-500 mt-2">Tip: Try adding AAPL, MSFT, AMZN, etc.</p>
       </div>
 
       <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-4 mb-6"><p class="text-red-700"></p></div>
@@ -761,17 +761,17 @@ def index():
     function displayPeers(data) {
       const primaryLabel = data.primary_name ? data.primary_company + ' — ' + data.primary_name : data.primary_company;
       const html = `
-        <h2 class="text-2xl font-semibold text-gray-800 mb-4">Peer Companies in ${data.industry}</h2>
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div class="bg-white p-4 rounded-lg shadow">
-            <div class="text-sm text-gray-600 mb-1">Primary Company</div>
-            <div class="text-xl font-bold text-indigo-600">${primaryLabel}</div>
+        <h2 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">Peer Companies in ${data.industry}</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+          <div class="bg-white p-3 md:p-4 rounded-lg shadow">
+            <div class="text-xs md:text-sm text-gray-600 mb-1">Primary Company</div>
+            <div class="text-base md:text-xl font-bold text-indigo-600 break-words">${primaryLabel}</div>
           </div>
           ${data.peers.map((peer, idx) => `
-            <div class="bg-white p-4 rounded-lg shadow">
-              <div class="text-sm text-gray-600 mb-1">Peer ${idx + 1}</div>
-              <div class="text-xl font-bold text-gray-800">${peer.ticker}</div>
-              <div class="text-sm text-gray-600">${peer.name || ''}</div>
+            <div class="bg-white p-3 md:p-4 rounded-lg shadow">
+              <div class="text-xs md:text-sm text-gray-600 mb-1">Peer ${idx + 1}</div>
+              <div class="text-base md:text-xl font-bold text-gray-800">${peer.ticker}</div>
+              <div class="text-xs md:text-sm text-gray-600 truncate">${peer.name || ''}</div>
             </div>
           `).join('')}
         </div>
@@ -848,15 +848,17 @@ def index():
     function renderAll(){
       const resultsDiv = document.getElementById('results');
       resultsDiv.innerHTML = `
-        <div class="bg-white rounded-lg shadow-xl p-6">
-          <h3 class="text-2xl font-semibold text-gray-800 mb-4">Total Revenue & Gross Margin % Trend</h3>
-          <canvas id="combinedChart" height="80"></canvas>
+        <div class="bg-white rounded-lg shadow-xl p-4 md:p-6">
+          <h3 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">Total Revenue & Gross Margin % Trend</h3>
+          <div class="w-full h-64 md:h-80">
+            <canvas id="combinedChart"></canvas>
+          </div>
         </div>
-        <div class="bg-white rounded-lg shadow-xl p-6 overflow-x-auto">
-          <h3 class="text-2xl font-semibold text-gray-800 mb-4">Latest Quarter Metrics</h3>
-          <table class="w-full" id="metricsTable"></table>
+        <div class="bg-white rounded-lg shadow-xl p-4 md:p-6 overflow-x-auto">
+          <h3 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">Latest Quarter Metrics</h3>
+          <table class="w-full text-xs md:text-base" id="metricsTable"></table>
         </div>
-        <div id="timeSeriesTables" class="space-y-6"></div>
+        <div id="timeSeriesTables" class="space-y-4 md:space-y-6"></div>
       `;
       resultsDiv.classList.remove('hidden');
 
@@ -897,9 +899,19 @@ def index():
         data: { labels, datasets: combinedDatasets },
         options: {
           responsive: true,
+          maintainAspectRatio: true,
           interaction: {
             mode: 'index',
             intersect: false
+          },
+          plugins: {
+            legend: {
+              labels: {
+                font: {
+                  size: window.innerWidth < 768 ? 10 : 12
+                }
+              }
+            }
           },
           scales: {
             y: {
@@ -944,14 +956,14 @@ def index():
         return quarters[0] || 'N/A';
       });
       
-      let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-3 px-4">Metric</th>';
+      let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-2 md:py-3 px-2 md:px-4">Metric</th>';
       _tickers.forEach((t, i) => {
-        html += `<th class="text-right py-3 px-4">${t}<br/><span class="text-xs text-gray-500">${tickerLatestQuarters[i]}</span></th>`;
+        html += `<th class="text-right py-2 md:py-3 px-2 md:px-4 whitespace-nowrap">${t}<br/><span class="text-xs text-gray-500">${tickerLatestQuarters[i]}</span></th>`;
       });
       html += '</tr></thead><tbody>';
 
       metrics.forEach(metric => {
-        html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-3 px-4 font-medium">${metric}</td>`;
+        html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-2 md:py-3 px-2 md:px-4 font-medium">${metric}</td>`;
         _tickers.forEach((t, i) => {
           const latestQ = tickerLatestQuarters[i];
           const v = (_metricsData[t] || {})[metric]?.[latestQ];
@@ -960,7 +972,7 @@ def index():
                 ? Number(v).toFixed(2) + '%'
                 : '$' + (Number(v)/1_000_000_000).toFixed(2) + 'B')
             : 'N/A';
-          html += `<td class="text-right py-3 px-4">${formatted}</td>`;
+          html += `<td class="text-right py-2 md:py-3 px-2 md:px-4 whitespace-nowrap">${formatted}</td>`;
         });
         html += '</tr>';
       });
@@ -975,16 +987,16 @@ def index():
       let html = '';
       _tickers.forEach(ticker => {
         html += `
-          <div class="bg-white rounded-lg shadow-xl p-6 overflow-x-auto">
-            <h3 class="text-2xl font-semibold text-gray-800 mb-4">${ticker} - 5 Quarter Time Series</h3>
-            <table class="w-full">
+          <div class="bg-white rounded-lg shadow-xl p-4 md:p-6 overflow-x-auto">
+            <h3 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">${ticker} - 5 Quarter Time Series</h3>
+            <table class="w-full text-xs md:text-base">
               <thead><tr class="border-b-2 border-gray-300">
-                <th class="text-left py-3 px-4"></th>
-                ${_quarters.map(q => `<th class="text-right py-3 px-4">${q}</th>`).join('')}
+                <th class="text-left py-2 md:py-3 px-2 md:px-4"></th>
+                ${_quarters.map(q => `<th class="text-right py-2 md:py-3 px-2 md:px-4 whitespace-nowrap">${q}</th>`).join('')}
               </tr></thead>
               <tbody>`;
         metrics.forEach(metric => {
-          html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-3 px-4 font-medium">${metric}</td>`;
+          html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-2 md:py-3 px-2 md:px-4 font-medium">${metric}</td>`;
           _quarters.forEach(q => {
             const v = (_metricsData[ticker] || {})[metric]?.[q];
             let formatted = 'N/A';
@@ -992,7 +1004,7 @@ def index():
               formatted = (metric === 'Gross Margin %') ? Number(v).toFixed(2) + '%'
                         : '$' + (Number(v)/1_000_000).toFixed(1) + 'M';
             }
-            html += `<td class="text-right py-3 px-4">${formatted}</td>`;
+            html += `<td class="text-right py-2 md:py-3 px-2 md:px-4 whitespace-nowrap">${formatted}</td>`;
           });
           html += '</tr>';
         });
