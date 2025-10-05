@@ -6,7 +6,7 @@ packages = ["freetype", "glibcLocales", "lcms2", "libimagequant", "libjpeg", "li
 
 [deployment]
 deploymentTarget = "gce"
-run = ["streamlit", "run", "app.py", "--server.port", "5000"]
+run = ["python", "app.py"]
 
 [workflows]
 runButton = "Project"
@@ -67,10 +67,6 @@ externalPort = 3000
 [[ports]]
 localPort = 38995
 externalPort = 3001
-
-[[ports]]
-localPort = 40351
-externalPort = 8000
 
 [[ports]]
 localPort = 42793
