@@ -705,13 +705,45 @@ def validate_ticker(ticker_input: str) -> str:
     except Exception:
         pass
     
-    # Try common abbreviation patterns (e.g., "RIVIAN" -> "RIVN")
+    # Try common abbreviation patterns (e.g., "RIVIAN" -> "RIVN", "LENDING CLUB" -> "LC")
+    # First, handle multi-word inputs by trying initials
+    if ' ' in ticker_input:
+        # Try initials: "LENDING CLUB" -> "LC"
+        words = ticker_input.split()
+        initials = ''.join([w[0] for w in words])
+        try:
+            test_ticker = yf.Ticker(initials)
+            income_data = test_ticker.quarterly_income_stmt
+            if income_data is not None and not income_data.empty:
+                info = test_ticker.info
+                if info and 'longName' in info:
+                    company_name = info['longName'].upper()
+                    # Check if input words appear in company name (as substrings)
+                    # E.g., "LENDING CLUB" should match "LENDINGCLUB CORPORATION"
+                    input_clean = ticker_input.replace(' ', '')
+                    company_clean = company_name.replace(' ', '').replace(',', '').replace('.', '')
+                    if input_clean in company_clean or all(word in company_clean for word in ticker_input.split()):
+                        print(f"[validate] Initials '{ticker_input}' -> '{initials}'")
+                        return initials
+        except Exception:
+            pass
+    
+    # Try single-word abbreviations and common patterns
     if len(ticker_input) >= 5:
+        # Try prefix abbreviations (including very short ones for compound words)
         abbreviations = [
             ticker_input[:4],  # First 4 chars: RIVIAN -> RIVI
-            ticker_input[:5],  # First 5 chars: RIVIAN -> RIVIA
+            ticker_input[:5],  # First 5 chars: RIVIAN -> RIVIA  
             ticker_input[:3],  # First 3 chars: RIVIAN -> RIV
+            ticker_input[:2],  # First 2 chars: LENDINGCLUB -> LE (will try LC too below)
         ]
+        
+        # For longer inputs, also try first letter + middle letter patterns
+        if len(ticker_input) >= 8:
+            # Try first letter of potential compound words
+            # E.g., "LENDINGCLUB" (11 chars) -> try "LC" (L from pos 0, C from pos ~6)
+            mid_point = len(ticker_input) // 2
+            abbreviations.append(ticker_input[0] + ticker_input[mid_point])  # LC from LENDINGCLUB
         for abbr in abbreviations:
             try:
                 test_ticker = yf.Ticker(abbr)
