@@ -292,6 +292,170 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
     return None
 
 
+# ============================================================
+# STEP 1: Peer Selection Add-Ons (constants & helpers)
+# ============================================================
+
+# Aliases only for peer logic (doesn't affect your resolver)
+PEER_TICKER_ALIAS = {
+    "GOOG": "GOOGL",
+    "FB":   "META",
+    "SRTA": "BLDE",   # Blade Air Mobility alias
+    "BLADE": "BLDE",
+}
+def _normalize_peer_ticker(t: str) -> str:
+    u = (t or "").upper().strip()
+    return PEER_TICKER_ALIAS.get(u, u)
+
+# Mega 7 (include TSLA)
+MEGA7 = [
+    {"ticker": "AAPL",  "name": "Apple Inc."},
+    {"ticker": "MSFT",  "name": "Microsoft Corporation"},
+    {"ticker": "GOOGL", "name": "Alphabet Inc. (Class A)"},
+    {"ticker": "AMZN",  "name": "Amazon.com, Inc."},
+    {"ticker": "META",  "name": "Meta Platforms, Inc."},
+    {"ticker": "NVDA",  "name": "NVIDIA Corporation"},
+    {"ticker": "TSLA",  "name": "Tesla, Inc."},
+]
+MEGA7_TICKERS = {x["ticker"] for x in MEGA7}
+
+# eVTOL group
+EVTOL_GROUP = [
+    {"ticker": "EH",    "name": "EHang Holdings Limited"},
+    {"ticker": "JOBY",  "name": "Joby Aviation, Inc."},
+    {"ticker": "ACHR",  "name": "Archer Aviation Inc."},
+    {"ticker": "BLDE",  "name": "Blade Air Mobility, Inc."},
+]
+EVTOL_TICKERS = {x["ticker"] for x in EVTOL_GROUP}
+
+# Tunables
+PEER_LIMIT = 6
+MARKET_CAP_RATIO_LIMIT = 10.0  # >10x difference -> exclude
+
+def _same_industry(a: str, b: str) -> bool:
+    return bool(a and b and a.strip().lower() == b.strip().lower())
+
+def _mc_ratio_ok(mc_a, mc_b, limit=MARKET_CAP_RATIO_LIMIT) -> bool:
+    """If both MCs present and ratio > limit -> not ok; if either missing -> allow."""
+    if mc_a is None or mc_b is None:
+        return True
+    small = min(mc_a, mc_b)
+    big = max(mc_a, mc_b)
+    if small <= 0:
+        return False
+    return (big / small) <= float(limit)
+
+@lru_cache(maxsize=512)
+def fetch_profile(ticker: str, max_retries: int = 2) -> dict:
+    """
+    Get {ticker, name, industry, market_cap} using yfinance.
+    Uses fast_info for market cap, and get_info for industry/name.
+    Cached to cut repeated calls.
+    """
+    t = (ticker or "").upper().strip()
+    if not t:
+        return {"ticker": ticker, "name": None, "industry": None, "market_cap": None}
+
+    stock = yf.Ticker(t)
+    _ensure_yf_session_headers(stock)
+
+    market_cap = None
+    name = t
+    industry = None
+
+    for attempt in range(max_retries):
+        try:
+            # market cap via fast_info
+            try:
+                fi = getattr(stock, "fast_info", {}) or {}
+                market_cap = fi.get("market_cap", None) if hasattr(fi, "get") else getattr(fi, "market_cap", None)
+            except Exception:
+                market_cap = None
+
+            # name/industry via get_info (may be slower)
+            info = {}
+            try:
+                info = stock.get_info() or {}
+            except Exception:
+                info = {}
+
+            name = info.get("longName") or info.get("shortName") or t
+            industry = info.get("industry") or info.get("sector")
+
+            return {
+                "ticker": t,
+                "name": name,
+                "industry": industry,
+                "market_cap": market_cap
+            }
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(0.4 * (attempt + 1))
+                continue
+            break
+
+    return {"ticker": t, "name": name, "industry": industry, "market_cap": market_cap}
+
+
+# ============================================================
+# STEP 2: Candidate Generators (S3 + optional OpenAI)
+# ============================================================
+
+def _s3_universe_candidates(base_ticker: str, base_industry: str, limit: int = 120):
+    """
+    Propose candidates from S3 universe (same industry). Offline & safe.
+    """
+    try:
+        universe = list(_ticker_to_name.keys())
+    except NameError:
+        universe = []
+    out = []
+    count = 0
+    for t in universe:
+        if t == base_ticker:
+            continue
+        prof = fetch_profile(t)
+        if _same_industry(base_industry or "", prof.get("industry") or ""):
+            out.append({"ticker": prof["ticker"], "name": prof.get("name")})
+        count += 1
+        if count >= limit:
+            break
+    return out
+
+
+def _openai_candidates(base_ticker: str, count: int = 16):
+    """
+    Optional: ask OpenAI to propose commonly compared names; we still filter by rules after.
+    """
+    try:
+        prompt = f"""
+List {count} publicly-traded companies that are commonly compared as peers to {base_ticker},
+operating in the same *industry* (not just sector). Return ONLY JSON:
+{{"peers":[{{"ticker":"T1","name":"Name 1"}}, ...]}}
+Exclude {base_ticker}. Prefer US-listed if available.
+"""
+        ai = client.chat.completions.create(
+            model="gpt-4",
+            temperature=0.1,
+            max_tokens=400,
+            messages=[
+                {"role": "system", "content": "Respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        raw = ai.choices[0].message.content.strip().replace("```json", "").replace("```", "")
+        obj = json.loads(raw)
+        peers = obj.get("peers", [])
+        out = []
+        for p in peers:
+            ct = _normalize_peer_ticker(p.get("ticker", ""))
+            if ct and ct != base_ticker:
+                out.append({"ticker": ct, "name": p.get("name")})
+        return out
+    except Exception:
+        return []
+
+
 # -----------------------------
 # Routes
 # -----------------------------
@@ -524,7 +688,7 @@ def index():
 
     function renderCharts(){
       const labels = _quarters;
-      
+
       const datasetsRevenue = _tickers.map((t, i) => ({
         label: t + ' Revenue',
         data: labels.map(q => (((_metricsData[t] || {})['Total Revenue']?.[q] || 0) / 1_000_000_000)),
@@ -668,149 +832,141 @@ def api_resolve():
         return jsonify({"error": str(e)}), 500
 
 
-def validate_ticker(ticker_input: str) -> str:
-    """
-    Validate and normalize a ticker symbol.
-    If the input looks like a company name, try to get the actual ticker.
-    Returns the validated ticker symbol or the original input if validation fails.
-    """
-    ticker_input = ticker_input.strip().upper()
-    
-    # First, try to validate with yfinance by checking if it has quarterly data
-    try:
-        test_ticker = yf.Ticker(ticker_input)
-        # Check if it has quarterly income data (a good indicator of a valid ticker)
-        income_data = test_ticker.quarterly_income_stmt
-        if income_data is not None and not income_data.empty:
-            # Valid ticker with data - return it
-            return ticker_input
-    except Exception:
-        pass
-    
-    # No valid data found - try to resolve as a company name
-    # This handles cases like "RIVIAN" -> "RIVN"
-    try:
-        resolved = resolve_input_to_ticker(ticker_input)
-        if resolved.get('ticker') and resolved['ticker'] != ticker_input:
-            candidate = resolved['ticker']
-            # Verify the resolved ticker actually has data
-            try:
-                verify_ticker = yf.Ticker(candidate)
-                verify_data = verify_ticker.quarterly_income_stmt
-                if verify_data is not None and not verify_data.empty:
-                    print(f"[validate] Resolved '{ticker_input}' -> '{candidate}'")
-                    return candidate
-            except Exception:
-                pass
-    except Exception:
-        pass
-    
-    # Try common abbreviation patterns (e.g., "RIVIAN" -> "RIVN", "LENDING CLUB" -> "LC")
-    # First, handle multi-word inputs by trying initials
-    if ' ' in ticker_input:
-        # Try initials: "LENDING CLUB" -> "LC"
-        words = ticker_input.split()
-        initials = ''.join([w[0] for w in words])
-        try:
-            test_ticker = yf.Ticker(initials)
-            income_data = test_ticker.quarterly_income_stmt
-            if income_data is not None and not income_data.empty:
-                info = test_ticker.info
-                if info and 'longName' in info:
-                    company_name = info['longName'].upper()
-                    # Check if input words appear in company name (as substrings)
-                    # E.g., "LENDING CLUB" should match "LENDINGCLUB CORPORATION"
-                    input_clean = ticker_input.replace(' ', '')
-                    company_clean = company_name.replace(' ', '').replace(',', '').replace('.', '')
-                    if input_clean in company_clean or all(word in company_clean for word in ticker_input.split()):
-                        print(f"[validate] Initials '{ticker_input}' -> '{initials}'")
-                        return initials
-        except Exception:
-            pass
-    
-    # Try single-word abbreviations and common patterns
-    if len(ticker_input) >= 5:
-        # Try prefix abbreviations (including very short ones for compound words)
-        abbreviations = [
-            ticker_input[:4],  # First 4 chars: RIVIAN -> RIVI
-            ticker_input[:5],  # First 5 chars: RIVIAN -> RIVIA  
-            ticker_input[:3],  # First 3 chars: RIVIAN -> RIV
-            ticker_input[:2],  # First 2 chars: LENDINGCLUB -> LE (will try LC too below)
-        ]
-        
-        # For longer inputs, also try first letter + middle letter patterns
-        if len(ticker_input) >= 8:
-            # Try first letter of potential compound words
-            # E.g., "LENDINGCLUB" (11 chars) -> try "LC" (L from pos 0, C from pos ~6)
-            mid_point = len(ticker_input) // 2
-            abbreviations.append(ticker_input[0] + ticker_input[mid_point])  # LC from LENDINGCLUB
-        for abbr in abbreviations:
-            try:
-                test_ticker = yf.Ticker(abbr)
-                income_data = test_ticker.quarterly_income_stmt
-                if income_data is not None and not income_data.empty:
-                    # Verify it's the right company by checking the name
-                    info = test_ticker.info
-                    if info and 'longName' in info:
-                        company_name = info['longName'].upper()
-                        # Check if the input string appears in the company name
-                        # E.g., "RIVIAN" should appear in "RIVIAN AUTOMOTIVE, INC."
-                        input_clean = ticker_input.replace(' ', '')
-                        if input_clean in company_name.replace(' ', '').replace(',', '').replace('.', ''):
-                            print(f"[validate] Abbreviated '{ticker_input}' -> '{abbr}'")
-                            return abbr
-            except Exception:
-                continue
-    
-    # If nothing worked, return original
-    print(f"[validate] Could not validate '{ticker_input}', using as-is")
-    return ticker_input
-
-
+# ============================================================
+# STEP 3: Revised Peer Selection Route (with Mega 7 + eVTOL)
+# ============================================================
 @app.route('/api/find-peers', methods=['POST'])
 def find_peers():
-    """Use OpenAI API to find peer companies"""
+    """
+    Revised peer selection:
+      - Special cases:
+          * Mega 7: if base in MEGA7 -> peers = other six members (TSLA included in the set).
+          * eVTOL: if base in EVTOL_TICKERS -> peers = rest of eVTOL group.
+      - General:
+          * Build candidate list (S3 + optional OpenAI).
+          * Keep only same-industry.
+          * If both MCs present and ratio > 10x -> exclude.
+          * Else include.
+          * Sort by MC closeness, return up to PEER_LIMIT.
+    """
     try:
         data = request.json or {}
-        ticker = (data.get('ticker') or '').upper().strip()
-        if not ticker:
+        base_ticker = _normalize_peer_ticker((data.get('ticker') or '').upper().strip())
+        if not base_ticker:
             return jsonify({'error': 'Ticker is required'}), 400
 
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a financial analyst. Respond only with valid JSON."},
-                {"role": "user", "content": f'''Given ticker "{ticker}", identify 3 peer companies with similar market cap and industry.
-Respond ONLY with valid JSON using actual ticker symbols (not company names):
-{{
-  "primary_company": "{ticker}",
-  "industry": "industry name",
-  "peers": [
-    {{"ticker": "TICKER1", "name": "Company Name 1"}},
-    {{"ticker": "TICKER2", "name": "Company Name 2"}},
-    {{"ticker": "TICKER3", "name": "Company Name 3"}}
-  ]
-}}
-IMPORTANT: Use only valid stock ticker symbols (e.g., RIVN not RIVIAN, TSLA not TESLA).'''}
-            ],
-            temperature=0.3,
-            max_tokens=400
-        )
+        base_prof = fetch_profile(base_ticker)
+        base_ind  = base_prof.get("industry")
+        base_mc   = base_prof.get("market_cap")
 
-        response_text = response.choices[0].message.content.strip()
-        # Clean up accidental code fences if present
-        response_text = response_text.replace('```json', '').replace('```', '').strip()
-        peer_data = json.loads(response_text)
-        
-        # Validate and normalize all peer tickers
-        if 'peers' in peer_data:
-            for peer in peer_data['peers']:
-                if 'ticker' in peer:
-                    original_ticker = peer['ticker']
-                    validated_ticker = validate_ticker(original_ticker)
-                    if validated_ticker != original_ticker:
-                        print(f"[find-peers] Corrected peer ticker: {original_ticker} -> {validated_ticker}")
-                    peer['ticker'] = validated_ticker
+        # --- Special: Mega 7
+        if base_ticker in MEGA7_TICKERS:
+            peers = [p for p in MEGA7 if p["ticker"] != base_ticker]
+            return jsonify({
+                "primary_company": base_prof["ticker"],
+                "industry": base_ind or "N/A",
+                "peers": peers
+            })
+
+        # --- Special: eVTOL
+        if base_ticker in EVTOL_TICKERS:
+            peers = [p for p in EVTOL_GROUP if p["ticker"] != base_ticker]
+            return jsonify({
+                "primary_company": base_prof["ticker"],
+                "industry": base_ind or "N/A",
+                "peers": peers
+            })
+
+        # --- Candidate pool (merge S3 + OpenAI, then unique) ---
+        cand = _s3_universe_candidates(base_ticker, base_ind or "", limit=120)
+        more = _openai_candidates(base_ticker, count=16)
+        seen = set()
+        candidates = []
+        for c in cand + more:
+            ct = _normalize_peer_ticker(c.get("ticker"))
+            if not ct or ct == base_ticker:
+                continue
+            if ct in seen:
+                continue
+            seen.add(ct)
+            candidates.append({"ticker": ct, "name": c.get("name")})
+
+        # --- Filter by rules ---
+        valid = []
+        for c in candidates:
+            prof = fetch_profile(c["ticker"])
+            c_ind = prof.get("industry")
+            c_mc  = prof.get("market_cap")
+
+            if not _same_industry(base_ind or "", c_ind or ""):
+                continue
+            if not _mc_ratio_ok(base_mc, c_mc, MARKET_CAP_RATIO_LIMIT):
+                continue
+
+            valid.append({
+                "ticker": prof["ticker"],
+                "name": prof.get("name") or c.get("name") or prof["ticker"],
+                "market_cap": c_mc
+            })
+
+        # Sort by MC closeness (if MCs known), then trim
+        def _score(v):
+            mc = v.get("market_cap")
+            if base_mc is None or mc is None:
+                return float('inf')
+            return abs((mc / base_mc) - 1.0)
+
+        valid.sort(key=_score)
+        peers_out = [{"ticker": v["ticker"], "name": v["name"]} for v in valid[:PEER_LIMIT]]
+
+        return jsonify({
+            "primary_company": base_prof["ticker"],
+            "industry": base_ind or "N/A",
+            "peers": peers_out
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/get-metrics', methods=['POST'])
+def get_metrics():
+    """Fetch financial metrics for multiple companies"""
+    try:
+        data = request.json or {}
+        tickers = data.get('tickers', [])
+        if not tickers:
+            return jsonify({'error': 'Tickers are required'}), 400
+
+        results = {}
+        for t in tickers:
+            metrics = calculate_metrics(t)
+            results[t] = metrics if metrics else {'error': 'Unable to fetch data'}
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/health')
+def health():
+    """Health check"""
+    return jsonify({
+        'status': 'healthy',
+        'openai_configured': bool(os.environ.get('OPENAI_API_KEY')),
+        's3_loaded': _s3_loaded,
+        's3_error': _s3_error,
+        'ticker_map_counts': {
+            'ticker_to_name': len(_ticker_to_name),
+            'name_to_ticker': len(_name_to_ticker)
+        }
+    })
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    # debug=True is fine for Replit; switch off in prod
+    app.run(host='0.0.0.0', port=port, debug=True)
+  peer['ticker'] = validated_ticker
         
         return jsonify(peer_data)
     except Exception as e:
