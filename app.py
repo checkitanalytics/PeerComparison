@@ -903,6 +903,8 @@ def index():
     let _tickers = [];             // ordered list for charts/tables
     let _quarters = [];            // sorted newest->oldest (max 5)
     let _combinedChart = null;
+    let _peerData = null;          // Store peer data from API
+    let _manualPeers = [];         // Track manually added peers
 
     const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#a4de6c', '#d0ed57', '#8dd1e1', '#a28dd1'];
 
@@ -946,6 +948,8 @@ def index():
         const peerData = await response.json();
         if (name && peerData && peerData.primary_company === ticker) peerData.primary_name = name;
 
+        _peerData = peerData;
+        _manualPeers = [];
         displayPeers(peerData);
 
         const tickers = [peerData.primary_company, ...peerData.peers.map(p => p.ticker)];
@@ -966,6 +970,7 @@ def index():
 
     function displayPeers(data) {
       const primaryLabel = data.primary_name ? data.primary_company + ' — ' + data.primary_name : data.primary_company;
+      const allPeers = [...data.peers, ..._manualPeers];
       const html = `
         <h2 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">Peer Companies in ${data.industry}</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
@@ -973,7 +978,7 @@ def index():
             <div class="text-xs md:text-sm text-gray-600 mb-1">Primary Company</div>
             <div class="text-base md:text-xl font-bold text-indigo-600 break-words">${primaryLabel}</div>
           </div>
-          ${data.peers.map((peer, idx) => `
+          ${allPeers.map((peer, idx) => `
             <div class="bg-white p-3 md:p-4 rounded-lg shadow">
               <div class="text-xs md:text-sm text-gray-600 mb-1">Peer ${idx + 1}</div>
               <div class="text-base md:text-xl font-bold text-gray-800">${peer.ticker}</div>
@@ -1015,6 +1020,17 @@ def index():
         _metricsData[newTicker] = oneMetrics[newTicker];
         _tickers.push(newTicker);
         _tickers = uniqLower(_tickers);
+
+        // Add to manual peers if we have peer data
+        if (_peerData && newTicker !== _peerData.primary_company) {
+          const alreadyInPeers = _peerData.peers.some(p => p.ticker === newTicker);
+          const alreadyManual = _manualPeers.some(p => p.ticker === newTicker);
+          if (!alreadyInPeers && !alreadyManual) {
+            const companyName = oneMetrics[newTicker].name || res.name || newTicker;
+            _manualPeers.push({ ticker: newTicker, name: companyName });
+            displayPeers(_peerData);
+          }
+        }
 
         // Recompute unified quarter set (top 5 newest)
         _quarters = computeQuarters(_metricsData, _tickers);
