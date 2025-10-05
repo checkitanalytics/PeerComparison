@@ -674,7 +674,7 @@ def index():
           <canvas id="combinedChart" height="80"></canvas>
         </div>
         <div class="bg-white rounded-lg shadow-xl p-6 overflow-x-auto">
-          <h3 class="text-2xl font-semibold text-gray-800 mb-4">${_quarters[0] || 'N/A'} Metrics</h3>
+          <h3 class="text-2xl font-semibold text-gray-800 mb-4">Latest Quarter Metrics</h3>
           <table class="w-full" id="metricsTable"></table>
         </div>
         <div id="timeSeriesTables" class="space-y-6"></div>
@@ -757,13 +757,24 @@ def index():
 
     function renderTable(){
       const metrics = ['Total Revenue', 'Gross Margin %', 'Operating Expense', 'EBIT', 'Net Income', 'Free Cash Flow'];
-      const latestQ = _quarters[0];
+      
+      // Get the latest quarter available for each company
+      const tickerLatestQuarters = _tickers.map(t => {
+        const tData = _metricsData[t] || {};
+        const quarters = tData['Total Revenue'] ? Object.keys(tData['Total Revenue']).sort().reverse() : [];
+        return quarters[0] || 'N/A';
+      });
+      
       let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-3 px-4">Metric</th>';
-      _tickers.forEach(t => html += `<th class="text-right py-3 px-4">${t}</th>`); html += '</tr></thead><tbody>';
+      _tickers.forEach((t, i) => {
+        html += `<th class="text-right py-3 px-4">${t}<br/><span class="text-xs text-gray-500">${tickerLatestQuarters[i]}</span></th>`;
+      });
+      html += '</tr></thead><tbody>';
 
       metrics.forEach(metric => {
         html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-3 px-4 font-medium">${metric}</td>`;
-        _tickers.forEach(t => {
+        _tickers.forEach((t, i) => {
+          const latestQ = tickerLatestQuarters[i];
           const v = (_metricsData[t] || {})[metric]?.[latestQ];
           const formatted = (v !== undefined && v !== null)
             ? (metric === 'Gross Margin %'
