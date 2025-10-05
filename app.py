@@ -661,27 +661,23 @@ def index():
       <h1 class="text-4xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
       <p class="text-gray-600 mb-6">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
-      <!-- Find peers -->
-      <div class="flex flex-col gap-3 mb-6">
-        <div class="flex gap-4">
+      <!-- Search boxes and buttons in one row -->
+      <div class="mb-6">
+        <div class="flex gap-3 items-center">
           <input type="text" id="tickerInput" placeholder="e.g., TSLA or Tesla"
             class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-lg">
           <button onclick="resolveAndFind()" id="findButton"
-            class="px-8 py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors">
+            class="px-6 py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors whitespace-nowrap">
             Find Peers
           </button>
-        </div>
-
-        <!-- NEW: Manually add a company to compare -->
-        <div class="flex gap-4 items-center">
           <input type="text" id="manualInput" placeholder="Add company (ticker or name)"
             class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-lg">
           <button onclick="addCompany()" id="addButton"
-            class="px-6 py-3 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-gray-400 transition-colors">
+            class="px-6 py-3 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-gray-400 transition-colors whitespace-nowrap">
             Add company
           </button>
         </div>
-        <p class="text-sm text-gray-500 -mt-1">Tip: Try adding AAPL, MSFT, AMZN, etc.</p>
+        <p class="text-sm text-gray-500 mt-2">Tip: Try adding AAPL, MSFT, AMZN, etc.</p>
       </div>
 
       <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-4 mb-6"><p class="text-red-700"></p></div>
