@@ -1026,6 +1026,22 @@ def api_resolve():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/diagnostics', methods=['GET'])
+def api_diagnostics():
+    """Return diagnostic information about S3 connection and ticker map status"""
+    return jsonify({
+        "s3_loaded": _s3_loaded,
+        "s3_error": _s3_error,
+        "boto3_available": BOTO3_AVAILABLE,
+        "ticker_count": len(_ticker_to_name),
+        "company_name_count": len(_name_to_ticker),
+        "s3_bucket": S3_BUCKET,
+        "s3_prefix": S3_PREFIX,
+        "aws_region": AWS_REGION,
+        "aws_credentials_present": bool(os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"))
+    })
+
+
 # ============================================================
 # STEP 3: Revised Peer Selection Route (with Mega 7 + eVTOL)
 # ============================================================
