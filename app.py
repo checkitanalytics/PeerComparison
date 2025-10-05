@@ -555,7 +555,7 @@ EV_GROUP = [
 EV_TICKERS = {x["ticker"] for x in EV_GROUP}
 
 # Tunables
-PEER_LIMIT = 6
+PEER_LIMIT = 2
 MARKET_CAP_RATIO_LIMIT = 10.0  # >10x difference -> exclude
 
 def _same_industry(a: str, b: str) -> bool:
@@ -1285,7 +1285,25 @@ def find_peers():
 
         # --- Special: Mega 7
         if base_ticker in MEGA7_TICKERS:
-            peers = [p for p in MEGA7 if p["ticker"] != base_ticker]
+            peers_candidates = [p for p in MEGA7 if p["ticker"] != base_ticker]
+            peers_with_mc = []
+            for p in peers_candidates:
+                p_prof = fetch_profile(p["ticker"])
+                peers_with_mc.append({
+                    "ticker": p["ticker"],
+                    "name": p["name"],
+                    "market_cap": p_prof.get("market_cap")
+                })
+            
+            def _score(v):
+                mc = v.get("market_cap")
+                if base_mc is None or mc is None:
+                    return float('inf')
+                return abs((mc / base_mc) - 1.0)
+            
+            peers_with_mc.sort(key=_score)
+            peers = [{"ticker": v["ticker"], "name": v["name"]} for v in peers_with_mc[:PEER_LIMIT]]
+            
             return jsonify({
                 "primary_company": base_prof["ticker"],
                 "industry": base_ind or "N/A",
@@ -1294,7 +1312,25 @@ def find_peers():
 
         # --- Special: eVTOL
         if base_ticker in EVTOL_TICKERS:
-            peers = [p for p in EVTOL_GROUP if p["ticker"] != base_ticker]
+            peers_candidates = [p for p in EVTOL_GROUP if p["ticker"] != base_ticker]
+            peers_with_mc = []
+            for p in peers_candidates:
+                p_prof = fetch_profile(p["ticker"])
+                peers_with_mc.append({
+                    "ticker": p["ticker"],
+                    "name": p["name"],
+                    "market_cap": p_prof.get("market_cap")
+                })
+            
+            def _score(v):
+                mc = v.get("market_cap")
+                if base_mc is None or mc is None:
+                    return float('inf')
+                return abs((mc / base_mc) - 1.0)
+            
+            peers_with_mc.sort(key=_score)
+            peers = [{"ticker": v["ticker"], "name": v["name"]} for v in peers_with_mc[:PEER_LIMIT]]
+            
             return jsonify({
                 "primary_company": base_prof["ticker"],
                 "industry": base_ind or "N/A",
@@ -1303,7 +1339,25 @@ def find_peers():
 
         # --- Special: EV (Electric Vehicle)
         if base_ticker in EV_TICKERS:
-            peers = [p for p in EV_GROUP if p["ticker"] != base_ticker]
+            peers_candidates = [p for p in EV_GROUP if p["ticker"] != base_ticker]
+            peers_with_mc = []
+            for p in peers_candidates:
+                p_prof = fetch_profile(p["ticker"])
+                peers_with_mc.append({
+                    "ticker": p["ticker"],
+                    "name": p["name"],
+                    "market_cap": p_prof.get("market_cap")
+                })
+            
+            def _score(v):
+                mc = v.get("market_cap")
+                if base_mc is None or mc is None:
+                    return float('inf')
+                return abs((mc / base_mc) - 1.0)
+            
+            peers_with_mc.sort(key=_score)
+            peers = [{"ticker": v["ticker"], "name": v["name"]} for v in peers_with_mc[:PEER_LIMIT]]
+            
             return jsonify({
                 "primary_company": base_prof["ticker"],
                 "industry": base_ind or "N/A",
