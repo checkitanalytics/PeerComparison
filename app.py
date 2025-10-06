@@ -883,16 +883,24 @@ def index():
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-2 md:p-4">
+  <!-- Sidebar Toggle Button -->
+  <button onclick="toggleSidebar()" id="sidebarToggle" 
+    class="fixed top-2 left-2 z-50 bg-white rounded shadow-lg p-1.5 hover:bg-indigo-50 transition-all border border-gray-200">
+    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+    </svg>
+  </button>
+
   <div class="flex flex-col md:flex-row gap-2 max-w-7xl mx-auto">
-    <!-- Sidebar - Horizontal on mobile, vertical on desktop -->
-    <div class="flex flex-row md:flex-col gap-2 md:w-48">
+    <!-- Sidebar - Collapsible -->
+    <div id="sidebar" class="hidden md:flex flex-col gap-2 md:w-40 transition-all duration-300">
       <a href="https://equityresearch.checkitanalytics.com/" target="_blank" 
-         class="flex-1 md:flex-none bg-white rounded shadow p-2 text-center text-xs md:text-sm font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300">
-        Equity Research Analyst
+         class="bg-white rounded shadow p-1.5 text-center text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300">
+        Equity Research
       </a>
       <a href="https://smartnews.checkitanalytics.com/" target="_blank" 
-         class="flex-1 md:flex-none bg-white rounded shadow p-2 text-center text-xs md:text-sm font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300">
-        Intelligent News Analyst
+         class="bg-white rounded shadow p-1.5 text-center text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300">
+        News Analyst
       </a>
     </div>
     
@@ -902,23 +910,23 @@ def index():
       <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-1 md:mb-2">Peer Company Key Metrics Comparison</h1>
       <p class="text-xs md:text-sm text-gray-600 mb-3">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
-      <!-- Search boxes and buttons - responsive layout -->
-      <div class="mb-3">
-        <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
-          <input type="text" id="tickerInput" placeholder="e.g., TSLA or Tesla"
-            class="flex-1 px-2 md:px-3 py-2 border-2 border-gray-300 rounded focus:outline-none focus:border-indigo-500 text-sm md:text-base">
+      <!-- Search boxes and buttons - minimized -->
+      <div class="mb-2">
+        <div class="flex flex-col md:flex-row gap-1.5 items-stretch md:items-center">
+          <input type="text" id="tickerInput" placeholder="e.g., TSLA"
+            class="flex-1 px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-indigo-500 text-xs md:text-sm">
           <button onclick="resolveAndFind()" id="findButton"
-            class="px-3 md:px-4 py-2 bg-indigo-600 text-white rounded font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors whitespace-nowrap text-xs md:text-sm">
+            class="px-2 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-xs">
             Find Peers
           </button>
-          <input type="text" id="manualInput" placeholder="Add company (ticker or name)"
-            class="flex-1 px-2 md:px-3 py-2 border-2 border-gray-300 rounded focus:outline-none focus:border-indigo-500 text-sm md:text-base">
+          <input type="text" id="manualInput" placeholder="Add company"
+            class="flex-1 px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-indigo-500 text-xs md:text-sm">
           <button onclick="addCompany()" id="addButton"
-            class="px-3 md:px-4 py-2 bg-emerald-600 text-white rounded font-semibold hover:bg-emerald-700 disabled:bg-gray-400 transition-colors whitespace-nowrap text-xs md:text-sm">
-            Add company
+            class="px-2 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-xs">
+            Add
           </button>
         </div>
-        <p class="text-xs text-gray-500 mt-1">Tip: Try adding AAPL, MSFT, AMZN, etc.</p>
+        <p class="text-xs text-gray-500 mt-1">Tip: Try AAPL, MSFT, AMZN</p>
       </div>
 
       <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-3 mb-3"><p class="text-red-700 text-sm"></p></div>
@@ -943,6 +951,13 @@ def index():
     let _manualPeers = [];         // Track manually added peers
 
     const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#a4de6c', '#d0ed57', '#8dd1e1', '#a28dd1'];
+
+    // ---------- Sidebar Toggle ----------
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      sidebar.classList.toggle('hidden');
+      sidebar.classList.toggle('flex');
+    }
 
     // ---------- Utilities ----------
     function showError(msg){ const d=document.getElementById('error'); d.querySelector('p').textContent=msg; d.classList.remove('hidden'); }
