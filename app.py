@@ -882,54 +882,54 @@ def index():
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
-<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-4 md:p-8">
-  <div class="flex flex-col md:flex-row gap-4 max-w-7xl mx-auto">
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-2 md:p-4">
+  <div class="flex flex-col md:flex-row gap-2 max-w-7xl mx-auto">
     <!-- Sidebar - Horizontal on mobile, vertical on desktop -->
-    <div class="flex flex-row md:flex-col gap-3 md:w-64">
+    <div class="flex flex-row md:flex-col gap-2 md:w-48">
       <a href="https://equityresearch.checkitanalytics.com/" target="_blank" 
-         class="flex-1 md:flex-none bg-white rounded-lg shadow-lg p-3 md:p-4 text-center text-sm md:text-base font-semibold text-indigo-600 hover:bg-indigo-50 hover:shadow-xl transition-all duration-200 border-2 border-transparent hover:border-indigo-300">
+         class="flex-1 md:flex-none bg-white rounded shadow p-2 text-center text-xs md:text-sm font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300">
         Equity Research Analyst
       </a>
       <a href="https://smartnews.checkitanalytics.com/" target="_blank" 
-         class="flex-1 md:flex-none bg-white rounded-lg shadow-lg p-3 md:p-4 text-center text-sm md:text-base font-semibold text-indigo-600 hover:bg-indigo-50 hover:shadow-xl transition-all duration-200 border-2 border-transparent hover:border-indigo-300">
+         class="flex-1 md:flex-none bg-white rounded shadow p-2 text-center text-xs md:text-sm font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300">
         Intelligent News Analyst
       </a>
     </div>
     
     <!-- Main Content -->
     <div class="flex-1">
-      <div class="bg-white rounded-lg shadow-xl p-4 md:p-8 mb-4 md:mb-8">
-      <h1 class="text-2xl md:text-4xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
-      <p class="text-sm md:text-base text-gray-600 mb-4 md:mb-6">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
+      <div class="bg-white rounded-lg shadow-xl p-3 md:p-5 mb-3">
+      <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-1 md:mb-2">Peer Company Key Metrics Comparison</h1>
+      <p class="text-xs md:text-sm text-gray-600 mb-3">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
       <!-- Search boxes and buttons - responsive layout -->
-      <div class="mb-6">
-        <div class="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+      <div class="mb-3">
+        <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
           <input type="text" id="tickerInput" placeholder="e.g., TSLA or Tesla"
-            class="flex-1 px-3 md:px-4 py-2 md:py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-base md:text-lg">
+            class="flex-1 px-2 md:px-3 py-2 border-2 border-gray-300 rounded focus:outline-none focus:border-indigo-500 text-sm md:text-base">
           <button onclick="resolveAndFind()" id="findButton"
-            class="px-4 md:px-6 py-2 md:py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors whitespace-nowrap text-sm md:text-base">
+            class="px-3 md:px-4 py-2 bg-indigo-600 text-white rounded font-semibold hover:bg-indigo-700 disabled:bg-gray-400 transition-colors whitespace-nowrap text-xs md:text-sm">
             Find Peers
           </button>
           <input type="text" id="manualInput" placeholder="Add company (ticker or name)"
-            class="flex-1 px-3 md:px-4 py-2 md:py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 text-base md:text-lg">
+            class="flex-1 px-2 md:px-3 py-2 border-2 border-gray-300 rounded focus:outline-none focus:border-indigo-500 text-sm md:text-base">
           <button onclick="addCompany()" id="addButton"
-            class="px-4 md:px-6 py-2 md:py-3 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-gray-400 transition-colors whitespace-nowrap text-sm md:text-base">
+            class="px-3 md:px-4 py-2 bg-emerald-600 text-white rounded font-semibold hover:bg-emerald-700 disabled:bg-gray-400 transition-colors whitespace-nowrap text-xs md:text-sm">
             Add company
           </button>
         </div>
-        <p class="text-xs md:text-sm text-gray-500 mt-2">Tip: Try adding AAPL, MSFT, AMZN, etc.</p>
+        <p class="text-xs text-gray-500 mt-1">Tip: Try adding AAPL, MSFT, AMZN, etc.</p>
       </div>
 
-      <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-4 mb-6"><p class="text-red-700"></p></div>
-      <div id="loading" class="hidden text-center py-4">
-        <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-        <p class="mt-2 text-gray-600">Working…</p>
+      <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-3 mb-3"><p class="text-red-700 text-sm"></p></div>
+      <div id="loading" class="hidden text-center py-3">
+        <div class="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+        <p class="mt-1 text-gray-600 text-sm">Working…</p>
       </div>
-      <div id="peerInfo" class="hidden bg-indigo-50 rounded-lg p-6 mb-8"></div>
+      <div id="peerInfo" class="hidden bg-indigo-50 rounded-lg p-3 md:p-4 mb-4"></div>
     </div>
 
-    <div id="results" class="hidden space-y-8"></div>
+    <div id="results" class="hidden space-y-4"></div>
     </div>
   </div>
 
@@ -1106,15 +1106,15 @@ def index():
     function renderAll(){
       const resultsDiv = document.getElementById('results');
       resultsDiv.innerHTML = `
-        <div class="bg-white rounded-lg shadow-xl p-4 md:p-6">
-          <h3 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">Total Revenue & Gross Margin % Trend</h3>
-          <div class="w-full h-64 md:h-80">
+        <div class="bg-white rounded-lg shadow-xl p-3 md:p-4">
+          <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2 md:mb-3">Total Revenue & Gross Margin % Trend</h3>
+          <div class="w-full h-48 md:h-64">
             <canvas id="combinedChart"></canvas>
           </div>
         </div>
-        <div class="bg-white rounded-lg shadow-xl p-4 md:p-6 overflow-x-auto">
-          <h3 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">Latest Quarter Metrics</h3>
-          <table class="w-full text-xs md:text-base" id="metricsTable"></table>
+        <div class="bg-white rounded-lg shadow-xl p-3 md:p-4 overflow-x-auto">
+          <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2 md:mb-3">Latest Quarter Metrics</h3>
+          <table class="w-full text-xs md:text-sm" id="metricsTable"></table>
         </div>
         <div id="timeSeriesTables" class="space-y-4 md:space-y-6"></div>
       `;
@@ -1214,23 +1214,23 @@ def index():
         return quarters[0] || 'N/A';
       });
       
-      let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-2 md:py-3 px-2 md:px-4">Metric</th>';
+      let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-1 px-0.5 md:px-2">Metric</th>';
       _tickers.forEach((t, i) => {
-        html += `<th class="text-right py-2 md:py-3 px-2 md:px-4 whitespace-nowrap">${t}<br/><span class="text-xs text-gray-500">${tickerLatestQuarters[i]}</span></th>`;
+        html += `<th class="text-right py-1 px-0.5 md:px-2">${t}<br/><span class="text-xs text-gray-500">${tickerLatestQuarters[i]}</span></th>`;
       });
       html += '</tr></thead><tbody>';
 
       metrics.forEach(metric => {
-        html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-2 md:py-3 px-2 md:px-4 font-medium">${metric}</td>`;
+        html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-1 px-0.5 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
         _tickers.forEach((t, i) => {
           const latestQ = tickerLatestQuarters[i];
           const v = (_metricsData[t] || {})[metric]?.[latestQ];
           const formatted = (v !== undefined && v !== null)
             ? (metric === 'Gross Margin %'
-                ? Number(v).toFixed(2) + '%'
-                : '$' + (Number(v)/1_000_000_000).toFixed(2) + 'B')
+                ? Number(v).toFixed(1) + '%'
+                : '$' + (Number(v)/1_000_000_000).toFixed(1) + 'B')
             : 'N/A';
-          html += `<td class="text-right py-2 md:py-3 px-2 md:px-4 whitespace-nowrap">${formatted}</td>`;
+          html += `<td class="text-right py-1 px-0.5 md:px-2">${formatted}</td>`;
         });
         html += '</tr>';
       });
@@ -1245,24 +1245,24 @@ def index():
       let html = '';
       _tickers.forEach(ticker => {
         html += `
-          <div class="bg-white rounded-lg shadow-xl p-4 md:p-6 overflow-x-auto">
-            <h3 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">${ticker} - 5 Quarter Time Series</h3>
-            <table class="w-full text-xs md:text-base">
+          <div class="bg-white rounded-lg shadow-xl p-3 md:p-4 overflow-x-auto">
+            <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2 md:mb-3">${ticker} - 5 Quarter Time Series</h3>
+            <table class="w-full text-xs md:text-sm">
               <thead><tr class="border-b-2 border-gray-300">
-                <th class="text-left py-2 md:py-3 px-2 md:px-4"></th>
-                ${_quarters.map(q => `<th class="text-right py-2 md:py-3 px-2 md:px-4 whitespace-nowrap">${q}</th>`).join('')}
+                <th class="text-left py-1 px-0.5 md:px-2"></th>
+                ${_quarters.map(q => `<th class="text-right py-1 px-0.5 md:px-2 text-xs">${q}</th>`).join('')}
               </tr></thead>
               <tbody>`;
         metrics.forEach(metric => {
-          html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-2 md:py-3 px-2 md:px-4 font-medium">${metric}</td>`;
+          html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-1 px-0.5 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
           _quarters.forEach(q => {
             const v = (_metricsData[ticker] || {})[metric]?.[q];
             let formatted = 'N/A';
             if (v !== undefined && v !== null) {
-              formatted = (metric === 'Gross Margin %') ? Number(v).toFixed(2) + '%'
-                        : '$' + (Number(v)/1_000_000).toFixed(1) + 'M';
+              formatted = (metric === 'Gross Margin %') ? Number(v).toFixed(1) + '%'
+                        : '$' + (Number(v)/1_000_000).toFixed(0) + 'M';
             }
-            html += `<td class="text-right py-2 md:py-3 px-2 md:px-4 whitespace-nowrap">${formatted}</td>`;
+            html += `<td class="text-right py-1 px-0.5 md:px-2 text-xs md:text-sm">${formatted}</td>`;
           });
           html += '</tr>';
         });
