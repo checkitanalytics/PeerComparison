@@ -11,3 +11,4 @@ flask==3.0.0
 flask-cors==4.0.0
 requests
 yfinance>=0.2.48
+gunicorn
