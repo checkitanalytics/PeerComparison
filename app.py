@@ -910,29 +910,23 @@ def index():
         </div>
       </div>
 
-      <!-- Search boxes and buttons - ultra compact layout -->
+      <!-- Search boxes and buttons - compact auto-fit layout -->
       <div class="mb-1.5">
-        <div class="flex flex-col gap-1">
-          <!-- First row: Ticker input + Find Peers button -->
-          <div class="flex gap-1 items-center">
-            <input type="text" id="tickerInput" placeholder="e.g., TSLA"
-              class="flex-1 min-w-0 px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-            <button onclick="resolveAndFind()" id="findButton"
-              class="flex-shrink-0 px-2 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-xs font-medium whitespace-nowrap">
-              Find Peers
-            </button>
-          </div>
-          <!-- Second row: Manual input + Add button -->
-          <div class="flex gap-1 items-center">
-            <input type="text" id="manualInput" placeholder="Add company"
-              class="flex-1 min-w-0 px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-            <button onclick="addCompany()" id="addButton"
-              class="flex-shrink-0 px-2 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-xs font-medium whitespace-nowrap">
-              Add
-            </button>
-          </div>
+        <div class="flex flex-wrap gap-1.5 items-center">
+          <input type="text" id="tickerInput" placeholder="e.g., TSLA" size="10"
+            class="w-auto min-w-[80px] max-w-[150px] px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+          <button onclick="resolveAndFind()" id="findButton"
+            class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-sm font-medium whitespace-nowrap">
+            Find Peers
+          </button>
+          <input type="text" id="manualInput" placeholder="Add company" size="12"
+            class="w-auto min-w-[100px] max-w-[180px] px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+          <button onclick="addCompany()" id="addButton"
+            class="px-3 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-sm font-medium whitespace-nowrap">
+            Add
+          </button>
         </div>
-        <p class="text-xs text-gray-500 mt-0.5 pl-0.5">Tip: Try AAPL, MSFT, AMZN</p>
+        <p class="text-xs text-gray-500 mt-0.5">Tip: Try AAPL, MSFT, AMZN</p>
       </div>
 
       <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-3 mb-3"><p class="text-red-700 text-sm"></p></div>
