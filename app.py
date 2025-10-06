@@ -912,21 +912,21 @@ def index():
 
       <!-- Search boxes and buttons - mobile optimized -->
       <div class="mb-2">
-        <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
+        <div class="flex flex-col md:flex-row gap-1.5 items-stretch md:items-center">
           <input type="text" id="tickerInput" placeholder="e.g., TSLA"
-            class="flex-1 px-3 py-2.5 md:px-2 md:py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm md:text-sm min-h-[44px] md:min-h-0">
+            class="w-auto md:w-40 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm min-h-[40px] md:min-h-0">
           <button onclick="resolveAndFind()" id="findButton"
-            class="px-4 py-2.5 md:px-2 md:py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-sm md:text-xs font-medium min-h-[44px] md:min-h-0 whitespace-nowrap">
+            class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-sm font-medium min-h-[40px] md:min-h-0 whitespace-nowrap">
             Find Peers
           </button>
           <input type="text" id="manualInput" placeholder="Add company"
-            class="flex-1 px-3 py-2.5 md:px-2 md:py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm md:text-sm min-h-[44px] md:min-h-0">
+            class="w-auto md:w-40 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm min-h-[40px] md:min-h-0">
           <button onclick="addCompany()" id="addButton"
-            class="px-4 py-2.5 md:px-2 md:py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-sm md:text-xs font-medium min-h-[44px] md:min-h-0 whitespace-nowrap">
+            class="px-3 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-sm font-medium min-h-[40px] md:min-h-0 whitespace-nowrap">
             Add
           </button>
         </div>
-        <p class="text-xs text-gray-500 mt-1.5">Tip: Try AAPL, MSFT, AMZN</p>
+        <p class="text-xs text-gray-500 mt-1">Tip: Try AAPL, MSFT, AMZN</p>
       </div>
 
       <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-3 mb-3"><p class="text-red-700 text-sm"></p></div>
