@@ -883,40 +883,32 @@ def index():
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-2 md:p-4">
-  <!-- Sidebar Toggle Button -->
-  <button onclick="toggleSidebar()" id="sidebarToggle" 
-    class="fixed top-2 left-2 z-50 bg-white rounded shadow-lg p-2 md:p-1.5 hover:bg-indigo-50 transition-all border border-gray-200 min-h-[44px] min-w-[44px] flex items-center justify-center">
-    <svg class="w-6 h-6 md:w-5 md:h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-    </svg>
-  </button>
-
-  <!-- Mobile Sidebar Backdrop -->
-  <div id="sidebarBackdrop" class="hidden fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden" onclick="toggleSidebar()"></div>
-
-  <div class="flex flex-col md:flex-row gap-2 max-w-7xl mx-auto">
-    <!-- Sidebar - Collapsible -->
-    <div id="sidebar" class="hidden md:flex flex-col gap-2 md:w-40 transition-all duration-300 fixed md:relative top-0 left-0 h-full md:h-auto bg-white md:bg-transparent p-4 md:p-0 z-40 md:z-auto w-64 md:w-40">
-      <button onclick="toggleSidebar()" class="md:hidden self-end mb-4 p-2 hover:bg-gray-100 rounded">
-        <svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-        </svg>
-      </button>
-      <a href="https://equityresearch.checkitanalytics.com/" target="_blank" 
-         class="bg-white md:bg-white rounded shadow p-3 md:p-1.5 text-center text-sm md:text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300 min-h-[44px] flex items-center justify-center">
-        Equity Research
-      </a>
-      <a href="https://smartnews.checkitanalytics.com/" target="_blank" 
-         class="bg-white md:bg-white rounded shadow p-3 md:p-1.5 text-center text-sm md:text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300 min-h-[44px] flex items-center justify-center">
-        News Analyst
-      </a>
-    </div>
-    
+  <div class="max-w-7xl mx-auto">
     <!-- Main Content -->
     <div class="flex-1">
       <div class="bg-white rounded-lg shadow-xl p-3 md:p-5 mb-3">
       <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-1 md:mb-2">Peer Company Key Metrics Comparison</h1>
       <p class="text-xs md:text-sm text-gray-600 mb-3">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
+
+      <!-- Expandable Tools Container -->
+      <div class="mb-3">
+        <button onclick="toggleTools()" id="toolsToggle" 
+          class="bg-white rounded shadow-lg p-2 hover:bg-indigo-50 transition-all border border-gray-200 min-h-[44px] min-w-[44px] flex items-center justify-center">
+          <svg class="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+          </svg>
+        </button>
+        <div id="toolsContainer" class="hidden mt-2 space-y-2">
+          <a href="https://equityresearch.checkitanalytics.com/" target="_blank" 
+             class="block bg-white rounded shadow p-3 text-center text-base font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300 min-h-[44px] flex items-center justify-center">
+            Equity Research
+          </a>
+          <a href="https://smartnews.checkitanalytics.com/" target="_blank" 
+             class="block bg-white rounded shadow p-3 text-center text-base font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300 min-h-[44px] flex items-center justify-center">
+            News Analyst
+          </a>
+        </div>
+      </div>
 
       <!-- Search boxes and buttons - mobile optimized -->
       <div class="mb-2">
@@ -948,6 +940,7 @@ def index():
     <div id="results" class="hidden space-y-4"></div>
     </div>
   </div>
+  </div>
 
   <script>
     // ---------- Global state ----------
@@ -960,13 +953,10 @@ def index():
 
     const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#a4de6c', '#d0ed57', '#8dd1e1', '#a28dd1'];
 
-    // ---------- Sidebar Toggle ----------
-    function toggleSidebar() {
-      const sidebar = document.getElementById('sidebar');
-      const backdrop = document.getElementById('sidebarBackdrop');
-      sidebar.classList.toggle('hidden');
-      sidebar.classList.toggle('flex');
-      backdrop.classList.toggle('hidden');
+    // ---------- Tools Toggle ----------
+    function toggleTools() {
+      const container = document.getElementById('toolsContainer');
+      container.classList.toggle('hidden');
     }
 
     // ---------- Utilities ----------
