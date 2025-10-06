@@ -890,8 +890,8 @@ def index():
       <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-1 md:mb-2">Peer Company Key Metrics Comparison</h1>
       <p class="text-xs md:text-sm text-gray-600 mb-3">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
-      <!-- Expandable Tools Container -->
-      <div class="mb-3">
+      <!-- Expandable Tools Container - Top Right Corner -->
+      <div class="fixed top-4 right-4 z-50">
         <button onclick="toggleTools()" id="toolsToggle" 
           class="bg-white rounded shadow-lg p-2 hover:bg-indigo-50 transition-all border border-gray-200 min-h-[44px] min-w-[44px] flex items-center justify-center">
           <svg class="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
