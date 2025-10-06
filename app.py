@@ -883,8 +883,22 @@ def index():
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-4 md:p-8">
-  <div class="max-w-7xl mx-auto">
-    <div class="bg-white rounded-lg shadow-xl p-4 md:p-8 mb-4 md:mb-8">
+  <div class="flex flex-col md:flex-row gap-4 max-w-7xl mx-auto">
+    <!-- Sidebar - Horizontal on mobile, vertical on desktop -->
+    <div class="flex flex-row md:flex-col gap-3 md:w-64">
+      <a href="https://equityresearch.checkitanalytics.com/" target="_blank" 
+         class="flex-1 md:flex-none bg-white rounded-lg shadow-lg p-3 md:p-4 text-center text-sm md:text-base font-semibold text-indigo-600 hover:bg-indigo-50 hover:shadow-xl transition-all duration-200 border-2 border-transparent hover:border-indigo-300">
+        Equity Research Analyst
+      </a>
+      <a href="https://smartnews.checkitanalytics.com/" target="_blank" 
+         class="flex-1 md:flex-none bg-white rounded-lg shadow-lg p-3 md:p-4 text-center text-sm md:text-base font-semibold text-indigo-600 hover:bg-indigo-50 hover:shadow-xl transition-all duration-200 border-2 border-transparent hover:border-indigo-300">
+        Intelligent News Analyst
+      </a>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="flex-1">
+      <div class="bg-white rounded-lg shadow-xl p-4 md:p-8 mb-4 md:mb-8">
       <h1 class="text-2xl md:text-4xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
       <p class="text-sm md:text-base text-gray-600 mb-4 md:mb-6">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
@@ -916,6 +930,7 @@ def index():
     </div>
 
     <div id="results" class="hidden space-y-8"></div>
+    </div>
   </div>
 
   <script>
