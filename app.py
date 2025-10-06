@@ -885,21 +885,29 @@ def index():
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-2 md:p-4">
   <!-- Sidebar Toggle Button -->
   <button onclick="toggleSidebar()" id="sidebarToggle" 
-    class="fixed top-2 left-2 z-50 bg-white rounded shadow-lg p-1.5 hover:bg-indigo-50 transition-all border border-gray-200">
-    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    class="fixed top-2 left-2 z-50 bg-white rounded shadow-lg p-2 md:p-1.5 hover:bg-indigo-50 transition-all border border-gray-200 min-h-[44px] min-w-[44px] flex items-center justify-center">
+    <svg class="w-6 h-6 md:w-5 md:h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
     </svg>
   </button>
 
+  <!-- Mobile Sidebar Backdrop -->
+  <div id="sidebarBackdrop" class="hidden fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden" onclick="toggleSidebar()"></div>
+
   <div class="flex flex-col md:flex-row gap-2 max-w-7xl mx-auto">
     <!-- Sidebar - Collapsible -->
-    <div id="sidebar" class="hidden md:flex flex-col gap-2 md:w-40 transition-all duration-300">
+    <div id="sidebar" class="hidden md:flex flex-col gap-2 md:w-40 transition-all duration-300 fixed md:relative top-0 left-0 h-full md:h-auto bg-white md:bg-transparent p-4 md:p-0 z-40 md:z-auto w-64 md:w-40">
+      <button onclick="toggleSidebar()" class="md:hidden self-end mb-4 p-2 hover:bg-gray-100 rounded">
+        <svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+        </svg>
+      </button>
       <a href="https://equityresearch.checkitanalytics.com/" target="_blank" 
-         class="bg-white rounded shadow p-1.5 text-center text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300">
+         class="bg-white md:bg-white rounded shadow p-3 md:p-1.5 text-center text-sm md:text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300 min-h-[44px] flex items-center justify-center">
         Equity Research
       </a>
       <a href="https://smartnews.checkitanalytics.com/" target="_blank" 
-         class="bg-white rounded shadow p-1.5 text-center text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300">
+         class="bg-white md:bg-white rounded shadow p-3 md:p-1.5 text-center text-sm md:text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300 min-h-[44px] flex items-center justify-center">
         News Analyst
       </a>
     </div>
@@ -910,23 +918,23 @@ def index():
       <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-1 md:mb-2">Peer Company Key Metrics Comparison</h1>
       <p class="text-xs md:text-sm text-gray-600 mb-3">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
 
-      <!-- Search boxes and buttons - minimized -->
+      <!-- Search boxes and buttons - mobile optimized -->
       <div class="mb-2">
-        <div class="flex flex-col md:flex-row gap-1.5 items-stretch md:items-center">
+        <div class="flex flex-col md:flex-row gap-2 items-stretch md:items-center">
           <input type="text" id="tickerInput" placeholder="e.g., TSLA"
-            class="flex-1 px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-indigo-500 text-xs md:text-sm">
+            class="flex-1 px-3 py-2.5 md:px-2 md:py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm md:text-sm min-h-[44px] md:min-h-0">
           <button onclick="resolveAndFind()" id="findButton"
-            class="px-2 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-xs">
+            class="px-4 py-2.5 md:px-2 md:py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-sm md:text-xs font-medium min-h-[44px] md:min-h-0 whitespace-nowrap">
             Find Peers
           </button>
           <input type="text" id="manualInput" placeholder="Add company"
-            class="flex-1 px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:border-indigo-500 text-xs md:text-sm">
+            class="flex-1 px-3 py-2.5 md:px-2 md:py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm md:text-sm min-h-[44px] md:min-h-0">
           <button onclick="addCompany()" id="addButton"
-            class="px-2 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-xs">
+            class="px-4 py-2.5 md:px-2 md:py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-sm md:text-xs font-medium min-h-[44px] md:min-h-0 whitespace-nowrap">
             Add
           </button>
         </div>
-        <p class="text-xs text-gray-500 mt-1">Tip: Try AAPL, MSFT, AMZN</p>
+        <p class="text-xs text-gray-500 mt-1.5">Tip: Try AAPL, MSFT, AMZN</p>
       </div>
 
       <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-3 mb-3"><p class="text-red-700 text-sm"></p></div>
@@ -955,8 +963,10 @@ def index():
     // ---------- Sidebar Toggle ----------
     function toggleSidebar() {
       const sidebar = document.getElementById('sidebar');
+      const backdrop = document.getElementById('sidebarBackdrop');
       sidebar.classList.toggle('hidden');
       sidebar.classList.toggle('flex');
+      backdrop.classList.toggle('hidden');
     }
 
     // ---------- Utilities ----------
@@ -1123,7 +1133,7 @@ def index():
       resultsDiv.innerHTML = `
         <div class="bg-white rounded-lg shadow-xl p-3 md:p-4">
           <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2 md:mb-3">Total Revenue & Gross Margin % Trend</h3>
-          <div class="w-full h-48 md:h-64">
+          <div class="w-full" style="height: 250px;">
             <canvas id="combinedChart"></canvas>
           </div>
         </div>
@@ -1167,35 +1177,55 @@ def index():
       const combinedDatasets = [...datasetsRevenue, ...datasetsMargin];
 
       if (_combinedChart) _combinedChart.destroy();
+      const isMobile = window.innerWidth < 768;
       _combinedChart = new Chart(document.getElementById('combinedChart'), {
         type: 'bar',
         data: { labels, datasets: combinedDatasets },
         options: {
           responsive: true,
-          maintainAspectRatio: true,
+          maintainAspectRatio: false,
           interaction: {
             mode: 'index',
             intersect: false
           },
           plugins: {
             legend: {
+              display: !isMobile || _tickers.length <= 3,
+              position: isMobile ? 'bottom' : 'top',
               labels: {
                 font: {
-                  size: window.innerWidth < 768 ? 10 : 12
-                }
+                  size: isMobile ? 9 : 12
+                },
+                padding: isMobile ? 5 : 10,
+                boxWidth: isMobile ? 10 : 40
               }
             }
           },
           scales: {
+            x: {
+              ticks: {
+                font: {
+                  size: isMobile ? 9 : 11
+                },
+                maxRotation: isMobile ? 45 : 0,
+                minRotation: isMobile ? 45 : 0
+              }
+            },
             y: {
               type: 'linear',
               display: true,
               position: 'left',
               title: {
-                display: true,
-                text: 'Total Revenue (Billions $)'
+                display: !isMobile,
+                text: 'Total Revenue (Billions $)',
+                font: {
+                  size: isMobile ? 10 : 12
+                }
               },
               ticks: {
+                font: {
+                  size: isMobile ? 9 : 11
+                },
                 callback: v => '$' + Number(v).toFixed(1) + 'B'
               }
             },
@@ -1204,10 +1234,16 @@ def index():
               display: true,
               position: 'right',
               title: {
-                display: true,
-                text: 'Gross Margin %'
+                display: !isMobile,
+                text: 'Gross Margin %',
+                font: {
+                  size: isMobile ? 10 : 12
+                }
               },
               ticks: {
+                font: {
+                  size: isMobile ? 9 : 11
+                },
                 callback: v => Number(v).toFixed(1) + '%'
               },
               grid: {
@@ -1229,14 +1265,14 @@ def index():
         return quarters[0] || 'N/A';
       });
       
-      let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-1 px-0.5 md:px-2">Metric</th>';
+      let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-2 px-1 md:px-2">Metric</th>';
       _tickers.forEach((t, i) => {
-        html += `<th class="text-right py-1 px-0.5 md:px-2">${t}<br/><span class="text-xs text-gray-500">${tickerLatestQuarters[i]}</span></th>`;
+        html += `<th class="text-right py-2 px-1 md:px-2 min-w-[80px]">${t}<br/><span class="text-xs text-gray-500">${tickerLatestQuarters[i]}</span></th>`;
       });
       html += '</tr></thead><tbody>';
 
       metrics.forEach(metric => {
-        html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-1 px-0.5 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
+        html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-2 px-1 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
         _tickers.forEach((t, i) => {
           const latestQ = tickerLatestQuarters[i];
           const v = (_metricsData[t] || {})[metric]?.[latestQ];
@@ -1245,7 +1281,7 @@ def index():
                 ? Number(v).toFixed(1) + '%'
                 : '$' + (Number(v)/1_000_000_000).toFixed(1) + 'B')
             : 'N/A';
-          html += `<td class="text-right py-1 px-0.5 md:px-2">${formatted}</td>`;
+          html += `<td class="text-right py-2 px-1 md:px-2">${formatted}</td>`;
         });
         html += '</tr>';
       });
@@ -1264,12 +1300,12 @@ def index():
             <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2 md:mb-3">${ticker} - 5 Quarter Time Series</h3>
             <table class="w-full text-xs md:text-sm">
               <thead><tr class="border-b-2 border-gray-300">
-                <th class="text-left py-1 px-0.5 md:px-2"></th>
-                ${_quarters.map(q => `<th class="text-right py-1 px-0.5 md:px-2 text-xs">${q}</th>`).join('')}
+                <th class="text-left py-2 px-1 md:px-2"></th>
+                ${_quarters.map(q => `<th class="text-right py-2 px-1 md:px-2 text-xs min-w-[70px]">${q}</th>`).join('')}
               </tr></thead>
               <tbody>`;
         metrics.forEach(metric => {
-          html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-1 px-0.5 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
+          html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-2 px-1 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
           _quarters.forEach(q => {
             const v = (_metricsData[ticker] || {})[metric]?.[q];
             let formatted = 'N/A';
@@ -1277,7 +1313,7 @@ def index():
               formatted = (metric === 'Gross Margin %') ? Number(v).toFixed(1) + '%'
                         : '$' + (Number(v)/1_000_000).toFixed(0) + 'M';
             }
-            html += `<td class="text-right py-1 px-0.5 md:px-2 text-xs md:text-sm">${formatted}</td>`;
+            html += `<td class="text-right py-2 px-1 md:px-2 text-xs md:text-sm">${formatted}</td>`;
           });
           html += '</tr>';
         });
