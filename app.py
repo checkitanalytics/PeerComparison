@@ -913,14 +913,14 @@ def index():
       <!-- Search boxes and buttons - compact auto-fit layout -->
       <div class="mb-1.5">
         <div class="flex flex-wrap gap-1.5 items-center">
-          <input type="text" id="tickerInput" placeholder="e.g., TSLA" size="10"
-            class="w-auto min-w-[80px] max-w-[150px] px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+          <input type="text" id="tickerInput" placeholder="e.g., TSLA" size="8"
+            class="w-auto min-w-[60px] max-w-[130px] px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
           <button onclick="resolveAndFind()" id="findButton"
             class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-sm font-medium whitespace-nowrap">
             Find Peers
           </button>
-          <input type="text" id="manualInput" placeholder="Add company" size="12"
-            class="w-auto min-w-[100px] max-w-[180px] px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+          <input type="text" id="manualInput" placeholder="Add company" size="9"
+            class="w-auto min-w-[80px] max-w-[160px] px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
           <button onclick="addCompany()" id="addButton"
             class="px-3 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-sm font-medium whitespace-nowrap">
             Add
