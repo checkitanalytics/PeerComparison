@@ -914,15 +914,15 @@ def index():
       <div class="mb-2">
         <div class="flex flex-col md:flex-row gap-1.5 items-stretch md:items-center">
           <input type="text" id="tickerInput" placeholder="e.g., TSLA"
-            class="w-auto md:w-40 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm min-h-[40px] md:min-h-0">
+            class="w-auto md:w-40 px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
           <button onclick="resolveAndFind()" id="findButton"
-            class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-sm font-medium min-h-[40px] md:min-h-0 whitespace-nowrap">
+            class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-sm font-medium whitespace-nowrap">
             Find Peers
           </button>
           <input type="text" id="manualInput" placeholder="Add company"
-            class="w-auto md:w-40 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm min-h-[40px] md:min-h-0">
+            class="w-auto md:w-40 px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
           <button onclick="addCompany()" id="addButton"
-            class="px-3 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-sm font-medium min-h-[40px] md:min-h-0 whitespace-nowrap">
+            class="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-sm font-medium whitespace-nowrap">
             Add
           </button>
         </div>
