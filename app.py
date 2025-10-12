@@ -391,136 +391,202 @@ def resolve_input_to_ticker(user_input: str) -> dict:
 # -----------------------------
 def _ensure_yf_session_headers(t: yf.Ticker):
     try:
-        # yfinance maintains a session inside; set a user-agent once
-        if not hasattr(t, "_session_configured"):
-            t.session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            t._session_configured = True
+        sess = getattr(t, "session", None)
+        if sess and not getattr(t, "_session_configured", False):
+            hdrs = getattr(sess, "headers", None)
+            if isinstance(hdrs, dict):
+                hdrs.setdefault(
+                    "User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                )
+                t._session_configured = True
     except Exception:
         pass
 
 
 @lru_cache(maxsize=128)
 def calculate_metrics(ticker: str, max_retries: int = 3):
-    """Calculate key financial metrics for a given ticker with retry logic (cached).
-       Falls back to Perplexity API if yfinance data is unavailable after retries.
-    """
-    ticker = (ticker or "").upper().strip()
-    if not ticker:
-        return None
+        """
+        Calculate key metrics with robust fallbacks:
+        - Prefer quarterly_financials / quarterly_cashflow
+        - If empty, retry; then fallback to annual frames and reindex to last quarters if possible
+        - Normalize row labels; compute derived rows if missing
+        - If still no data, use Perplexity fallback
+        """
+        def _pick(df, labels):
+            """Return first existing row by label list (case-insensitive)."""
+            if df is None or df.empty:
+                return None
+            idx = {str(i).strip().lower(): i for i in df.index}
+            for lab in labels:
+                k = lab.strip().lower()
+                if k in idx:
+                    return df.loc[idx[k]]
+            return None
 
-    # ---------- Primary path: yfinance ----------
-    for attempt in range(max_retries):
-        try:
-            print(f"[metrics] {ticker} (attempt {attempt + 1}/{max_retries})")
-            if attempt > 0:
-                wait_time = (2 ** attempt) * 2
-                time.sleep(wait_time)
-
-            stock = yf.Ticker(ticker)
-            _ensure_yf_session_headers(stock)
-            time.sleep(0.5)
-
+        def _ensure_quarterly(df):
+            """Ensure columns are Period['Q']-able; slice to last 5 columns."""
+            if df is None or df.empty:
+                return df
             try:
-                income_quarterly = stock.quarterly_income_stmt if stock.quarterly_income_stmt is not None else pd.DataFrame()
-                time.sleep(0.2)
-                cash_flow_quarterly = stock.quarterly_cashflow   if stock.quarterly_cashflow   is not None else pd.DataFrame()
-            except Exception as fetch_error:
-                # If rate-limited, retry; otherwise fall through to fallback after retries
-                if "429" in str(fetch_error) and attempt < max_retries - 1:
-                    print("[metrics] rate-limited, retrying…")
-                    continue
-                print(f"[metrics] fetch error for {ticker}: {fetch_error}")
-                # try next attempt (if any) before falling back
+                # yfinance uses DatetimeIndex columns for quarter ends
+                df = df.copy()
+                if not isinstance(df.columns, pd.PeriodIndex):
+                    try:
+                        df.columns = pd.to_datetime(df.columns).to_period("Q")
+                    except Exception:
+                        # Some frames use strings like '2024-06-30'; still OK
+                        df.columns = pd.to_datetime(df.columns, errors="coerce").to_period("Q")
+                # keep last 5 most recent quarters
+                df = df.iloc[:, :5]
+                return df
+            except Exception:
+                return df
+
+        ticker = (ticker or "").upper().strip()
+        if not ticker:
+            return None
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    time.sleep((2 ** attempt) * 1.5)
+
+                stock = yf.Ticker(ticker)
+                _ensure_yf_session_headers(stock)
+                time.sleep(0.25)
+
+                # ---- Try quarterly frames first
+                fin_q = getattr(stock, "quarterly_financials", None)
+                cf_q  = getattr(stock, "quarterly_cashflow", None)
+
+                # If quarterly empty, try annual, then keep most recent 5 columns
+                if fin_q is None or fin_q.empty:
+                    fin_q = getattr(stock, "financials", None)
+                if cf_q is None or cf_q.empty:
+                    cf_q = getattr(stock, "cashflow", None)
+
+                # If still nothing, retry (possibly 429/empty)
+                if fin_q is None or fin_q.empty or cf_q is None or cf_q.empty:
+                    if attempt < max_retries - 1:
+                        continue
+                    # break to fallback
+                    break
+
+                fin_q = _ensure_quarterly(fin_q)
+                cf_q  = _ensure_quarterly(cf_q)
+
+                if fin_q is None or fin_q.empty or cf_q is None or cf_q.empty:
+                    if attempt < max_retries - 1:
+                        continue
+                    break
+
+                # ----- Map rows with tolerant labels
+                # Income statement / financials
+                total_rev = _pick(fin_q, [
+                    "Total Revenue", "Revenue", "TotalRevenue", "Total revenue"
+                ])
+                cost_rev  = _pick(fin_q, [
+                    "Cost Of Revenue", "Cost of Revenue", "CostOfRevenue"
+                ])
+                gross_profit = _pick(fin_q, [
+                    "Gross Profit", "GrossProfit"
+                ])
+                opex = _pick(fin_q, [
+                    "Operating Expense", "Operating Expenses", "Total Operating Expenses", "OperatingExpenses"
+                ])
+                ebit = _pick(fin_q, [
+                    "EBIT", "Operating Income", "OperatingIncome"
+                ])
+                net_income = _pick(fin_q, [
+                    "Net Income", "NetIncome", "Net Income Common Stockholders"
+                ])
+
+                # Cash flow
+                ocf = _pick(cf_q, [
+                    "Operating Cash Flow", "Total Cash From Operating Activities",
+                    "OperatingCashFlow"
+                ])
+                capex = _pick(cf_q, [
+                    "Capital Expenditure", "Capital Expenditures", "CapitalExpenditures"
+                ])
+
+                # Derivations
+                if gross_profit is None and total_rev is not None and cost_rev is not None:
+                    gross_profit = (total_rev - cost_rev)
+
+                if opex is None:
+                    sga = _pick(fin_q, ["Selling General And Administration", "Selling General Administrative", "SG&A Expense"])
+                    rnd = _pick(fin_q, ["Research And Development", "Research & Development"])
+                    if sga is not None and rnd is not None:
+                        opex = (sga + rnd)
+
+                if ebit is None:
+                    op_inc = _pick(fin_q, ["Operating Income", "OperatingIncome"])
+                    if op_inc is not None:
+                        ebit = op_inc
+
+                fcf = None
+                if ocf is not None and capex is not None:
+                    try:
+                        fcf = (ocf + capex)  # capex usually negative
+                    except Exception:
+                        pass
+
+                # Build result frame
+                out = {}
+                def _fill(name, s, is_pct=False):
+                    if s is None:
+                        return
+                    series = {}
+                    for q, v in s.items():
+                        if pd.isna(v):
+                            continue
+                        try:
+                            if is_pct:
+                                series[str(q)] = float(v)
+                            else:
+                                series[str(q)] = int(float(v))
+                        except Exception:
+                            continue
+                    if series:
+                        out[name] = series
+
+                # Gross margin %
+                gm_pct = None
+                if gross_profit is not None and total_rev is not None:
+                    try:
+                        gm_pct = (gross_profit / total_rev) * 100.0
+                    except Exception:
+                        gm_pct = None
+
+                _fill("Total Revenue", total_rev, is_pct=False)
+                _fill("Operating Expense", opex, is_pct=False)
+                _fill("EBIT", ebit, is_pct=False)
+                _fill("Net Income", net_income, is_pct=False)
+                if gm_pct is not None:
+                    _fill("Gross Margin %", gm_pct, is_pct=True)
+                if fcf is not None:
+                    _fill("Free Cash Flow", fcf, is_pct=False)
+
+                # If nothing meaningful, retry/fallback
+                if not out or not out.get("Total Revenue"):
+                    if attempt < max_retries - 1:
+                        continue
+                    break
+
+                return out
+
+            except Exception as e:
                 if attempt < max_retries - 1:
                     continue
-                # break to fallback
                 break
 
-            if income_quarterly.empty or cash_flow_quarterly.empty:
-                if attempt < max_retries - 1:
-                    print(f"[metrics] empty frames for {ticker}, retrying…")
-                    continue
-                print(f"[metrics] no data for {ticker} from yfinance")
-                # break to fallback
-                break
-
-            # Compute derived rows if needed
-            if "Gross Profit" in income_quarterly.index:
-                income_quarterly.loc["Gross Margin %"] = (
-                    income_quarterly.loc["Gross Profit"] * 100.0 / income_quarterly.loc["Total Revenue"]
-                )
-            else:
-                income_quarterly.loc["Gross Margin %"] = (
-                    (income_quarterly.loc["Total Revenue"] - income_quarterly.loc["Cost Of Revenue"]) * 100.0
-                    / income_quarterly.loc["Total Revenue"]
-                )
-
-            if "Operating Expense" not in income_quarterly.index:
-                if (
-                    "Selling General And Administration" in income_quarterly.index
-                    and "Research And Development" in income_quarterly.index
-                ):
-                    income_quarterly.loc["Operating Expense"] = (
-                        income_quarterly.loc["Selling General And Administration"]
-                        + income_quarterly.loc["Research And Development"]
-                    )
-
-            if "EBIT" not in income_quarterly.index and "Operating Income" in income_quarterly.index:
-                income_quarterly.loc["EBIT"] = income_quarterly.loc["Operating Income"]
-
-            if "Free Cash Flow" not in cash_flow_quarterly.index:
-                if (
-                    "Operating Cash Flow" in cash_flow_quarterly.index
-                    and "Capital Expenditure" in cash_flow_quarterly.index
-                ):
-                    cash_flow_quarterly.loc["Free Cash Flow"] = (
-                        cash_flow_quarterly.loc["Operating Cash Flow"] + cash_flow_quarterly.loc["Capital Expenditure"]
-                    )
-
-            metrics_to_extract = ["Total Revenue", "Operating Expense", "Gross Margin %", "EBIT", "Net Income"]
-            filtered_income = income_quarterly[income_quarterly.index.isin(metrics_to_extract)].iloc[:, 0:5]
-            filtered_cash_flow = cash_flow_quarterly[cash_flow_quarterly.index == "Free Cash Flow"].iloc[:, 0:5]
-
-            result = pd.concat([filtered_income, filtered_cash_flow], axis=0)
-            if result.empty:
-                # try another attempt if available; else fall back
-                if attempt < max_retries - 1:
-                    print(f"[metrics] empty result frame for {ticker}, retrying…")
-                    continue
-                print(f"[metrics] empty result for {ticker} from yfinance")
-                break
-
-            # Pretty quarter labels like '2024Q2'
-            result.columns = result.columns.to_period("Q").astype(str)
-
-            result_dict = {}
-            for metric in result.index:
-                result_dict[metric] = {}
-                for quarter in result.columns:
-                    value = result.loc[metric, quarter]
-                    if pd.notna(value):
-                        result_dict[metric][quarter] = float(value) if metric == "Gross Margin %" else int(value)
-                    else:
-                        result_dict[metric][quarter] = None
-
-            print(f"[metrics] success {ticker}")
-            return result_dict
-
-        except Exception as e:
-            print(f"[metrics] error {ticker}: {e}")
-            # if there are more attempts, loop; else break to fallback
-            if attempt < max_retries - 1:
-                continue
-            break
-
-    # ---------- Fallback: Perplexity API ----------
-    fb = perplexity_fallback_metrics(ticker, max_quarters=5)
-    if fb:
-        print(f"[metrics:fallback] Perplexity used for {ticker}")
-        return fb
-
-    print(f"[metrics] no data for {ticker} (yfinance + fallback failed)")
-    return None
+        # ---- LLM fallback
+        fb = perplexity_fallback_metrics(ticker, max_quarters=5)
+        if fb:
+            return fb
+        return None
 
 
 
@@ -594,11 +660,6 @@ def _mc_ratio_ok(mc_a, mc_b, limit=MARKET_CAP_RATIO_LIMIT) -> bool:
 
 @lru_cache(maxsize=512)
 def fetch_profile(ticker: str, max_retries: int = 2) -> dict:
-    """
-    Get {ticker, name, industry, market_cap} using yfinance.
-    Uses fast_info for market cap, and get_info for industry/name.
-    Cached to cut repeated calls.
-    """
     t = (ticker or "").upper().strip()
     if not t:
         return {"ticker": ticker, "name": None, "industry": None, "market_cap": None}
@@ -606,35 +667,33 @@ def fetch_profile(ticker: str, max_retries: int = 2) -> dict:
     stock = yf.Ticker(t)
     _ensure_yf_session_headers(stock)
 
-    market_cap = None
-    name = t
-    industry = None
+    name, industry, market_cap = t, None, None
 
     for attempt in range(max_retries):
         try:
-            # market cap via fast_info
+            # Try fast_info -> fallback to get_info
             try:
                 fi = getattr(stock, "fast_info", {}) or {}
                 market_cap = fi.get("market_cap", None) if hasattr(fi, "get") else getattr(fi, "market_cap", None)
             except Exception:
                 market_cap = None
 
-            # name/industry via get_info (may be slower)
             info = {}
             try:
                 info = stock.get_info() or {}
             except Exception:
                 info = {}
 
-            name = info.get("longName") or info.get("shortName") or t
-            industry = info.get("industry") or info.get("sector")
+            name = info.get("longName") or info.get("shortName") or name
+            industry = info.get("industry") or info.get("sector") or industry
 
-            return {
-                "ticker": t,
-                "name": name,
-                "industry": industry,
-                "market_cap": market_cap
-            }
+            if market_cap is None:
+                mc = info.get("marketCap")
+                if isinstance(mc, (int, float)) and mc > 0:
+                    market_cap = mc
+
+            return {"ticker": t, "name": name, "industry": industry, "market_cap": market_cap}
+
         except Exception:
             if attempt < max_retries - 1:
                 time.sleep(0.4 * (attempt + 1))
