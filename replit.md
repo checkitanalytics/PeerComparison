@@ -70,9 +70,19 @@ Preferred communication style: Simple, everyday language.
 - Returns: Financial metrics for each ticker (5 quarters of data)
 - Filters out companies with missing/incomplete data
 
+**POST /api/peer-key-metrics-conclusion**
+- Accepts: `{ "primary": "TSLA", "latest_quarter": {...}, "time_series": {...} }`
+- Returns: AI-generated financial analysis using OpenAI GPT-4
+- Analysis includes:
+  - 5-quarter time series trend analysis (revenue, margins, profitability)
+  - Latest quarter peer comparison
+  - Notable strengths and concerns
+- Fallback to basic summary if OpenAI fails
+
 **GET /api/health**
 - Health check endpoint
 - Verifies OpenAI API configuration
+- Returns: `{ "status": "ok", "openai_configured": true/false }`
 
 ### Visualization Features
 
@@ -149,13 +159,25 @@ Preferred communication style: Simple, everyday language.
 - Client-side chart rendering
 - Responsive UI with loading indicators
 
-**Recent Updates (October 2025)**
+**Recent Updates (October 15, 2025)**
+
+**Critical Bug Fix - Yahoo Finance Data Fetching:**
+- Fixed pandas DataFrame boolean evaluation error in calculate_metrics function
+- Issue: Using `or` operator with DataFrames caused "The truth value of a DataFrame is ambiguous" error
+- Solution: Replaced `getattr(s, "quarterly_financials", None) or getattr(s, "financials", None)` with explicit None checks
+- Impact: Yahoo Finance data fetching now works correctly for all tickers
+
+**AI-Powered Primary Company Conclusion:**
+- Implemented comprehensive AI analysis using OpenAI GPT-4
+- Analyzes 5-quarter time series trends (revenue growth, margin changes, profitability patterns)
+- Compares primary company with peers in latest quarter
+- Identifies notable strengths, concerns, and competitive positioning
+- Provides 3-4 sentence actionable insights
+- Includes fallback to basic summary if OpenAI API fails
+
+**Previous Updates:**
 - Added retry logic with exponential backoff for Yahoo Finance API
 - Implemented custom User-Agent headers to avoid blocking
 - Fixed missing data handling - companies with no data are filtered out
 - Changed table headers to show actual quarter/year instead of "Latest Quarter"
 - Added time series tables showing 5 quarters of historical data per company
-- **Critical Bug Fix**: Fixed pandas DataFrame boolean evaluation error in calculate_metrics function
-  - Issue: Using `or` operator with DataFrames caused "The truth value of a DataFrame is ambiguous" error
-  - Solution: Replaced `getattr(s, "quarterly_financials", None) or getattr(s, "financials", None)` with explicit None checks
-  - Impact: Yahoo Finance data fetching now works correctly for all tickers

@@ -959,15 +959,79 @@ def build_conclusion_text(summary: dict) -> str:
 def peer_key_metrics_conclusion():
     try:
         data = request.json or {}
-        primary = data.get('primary')
-        peers = data.get('peers', [])
+        primary_ticker = data.get('primary')
+        latest_quarter = data.get('latest_quarter', {})
+        time_series = data.get('time_series', {})
         lang = data.get('lang', 'en')
         
-        if not primary:
+        if not primary_ticker:
             return jsonify({'error': 'Primary company is required'}), 400
         
-        # For now, return a simple conclusion based on available data
-        conclusion_text = f"Analysis for {primary} compared to peers: {', '.join(peers) if peers else 'No peers'}"
+        # Build comprehensive analysis prompt
+        period = latest_quarter.get('period', 'Latest Quarter')
+        quarters = time_series.get('quarters', [])
+        ts_rows = time_series.get('rows', [])
+        lq_rows = latest_quarter.get('rows', [])
+        
+        # Extract peer companies from latest quarter data
+        peer_companies = []
+        if lq_rows and len(lq_rows) > 0:
+            first_row = lq_rows[0]
+            peer_companies = [k for k in first_row.keys() if k != 'metric' and k != primary_ticker]
+        
+        # Build time series summary
+        ts_summary = []
+        for row in ts_rows:
+            metric = row.get('metric')
+            values = row.get('values', [])
+            if metric and values:
+                ts_summary.append(f"{metric}: {', '.join([f'{q}={v}' for q, v in zip(quarters, values)])}")
+        
+        # Build latest quarter comparison
+        lq_summary = []
+        for row in lq_rows:
+            metric = row.get('metric')
+            metric_data = {k: v for k, v in row.items() if k != 'metric'}
+            if metric and metric_data:
+                lq_summary.append(f"{metric}: {', '.join([f'{k}={v}' for k, v in metric_data.items()])}")
+        
+        # Create prompt for OpenAI
+        prompt = f"""Analyze {primary_ticker}'s financial performance based on:
+
+**5-Quarter Time Series Trends ({', '.join(quarters)}):**
+{chr(10).join(ts_summary) if ts_summary else 'No time series data available'}
+
+**Latest Quarter ({period}) Comparison with Peers ({', '.join(peer_companies) if peer_companies else 'No peers'}):**
+{chr(10).join(lq_summary) if lq_summary else 'No comparison data available'}
+
+Provide a concise 3-4 sentence analysis covering:
+1. Key trends over the 5 quarters (growth, margins, profitability)
+2. How {primary_ticker} compares to peers in the latest quarter
+3. Notable strengths or concerns"""
+
+        # Call OpenAI for analysis
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a financial analyst providing concise, insightful analysis of company metrics."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=300
+            )
+            conclusion_text = (response.choices[0].message.content or "").strip()
+        except Exception as e:
+            # Fallback to basic analysis if OpenAI fails
+            conclusion_text = f"Analysis for {primary_ticker}: "
+            if ts_summary:
+                conclusion_text += f"5-quarter trend analysis available for {len(ts_summary)} metrics. "
+            if peer_companies:
+                conclusion_text += f"Latest quarter ({period}) compared with {len(peer_companies)} peers: {', '.join(peer_companies)}. "
+            else:
+                conclusion_text += "No peer comparison data available. "
+            conclusion_text += f"(AI analysis unavailable: {str(e)})"
+        
         return jsonify({'conclusion': conclusion_text})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
