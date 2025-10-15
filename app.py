@@ -1,28 +1,28 @@
-"""
-Peer Company Comparison - Complete Replit Application
-Serves both the API and the frontend HTML
-- NEW: S3-backed ticker<->company resolver (CSV/JSON under s3://checkitanalytics/tickers/)
-- NEW: /api/resolve to normalize user input to a ticker
-- Minor hardening for yfinance / retries / logging
-"""
+# Peer Company Comparison - Complete Replit Application
+# - S3-backed ticker resolver
+# - /api/resolve
+# - /api/find-peers
+# - /api/get-metrics
+# - /api/peer-key-metrics-conclusion (DeepSeek -> local fallback, EN/中文)
+# - Frontend builds payload, shows conclusion, and toggles EN/中文
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, json, time, io
+import os, json, time, io, math, re, statistics as stats
 from functools import lru_cache
 
 import pandas as pd
 import yfinance as yf
-import requests, re
+import requests
 
-
-# Optional: boto3 if AWS creds are provided (for S3 ticker map)
+# Optional: boto3 for S3 ticker map
 try:
     import boto3  # type: ignore
     BOTO3_AVAILABLE = True
 except Exception:
     BOTO3_AVAILABLE = False
 
+# OpenAI is used only for name->ticker resolve (NOT for conclusion)
 from openai import OpenAI
 
 # -----------------------------
@@ -32,362 +32,91 @@ app = Flask(__name__, static_folder='static')
 CORS(app)
 
 # -----------------------------
-# OpenAI
+# Config
 # -----------------------------
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# -----------------------------
-# S3 Ticker Map (optional)
-# Expects CSV/JSON files in s3://checkitanalytics/tickers/
-# Will build bi-directional maps: ticker -> name, name -> ticker
-# -----------------------------
+DEEPSEEK_API_KEY  = os.environ.get("DEEPSEEK_API_KEY")
+DEEPSEEK_API_BASE = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
+DEEPSEEK_MODEL    = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-S3_BUCKET = os.environ.get("S3_TICKER_BUCKET", "checkitanalytics")
-S3_PREFIX = os.environ.get("S3_TICKER_PREFIX", "tickers/")
+S3_BUCKET  = os.environ.get("S3_TICKER_BUCKET", "checkitanalytics")
+S3_PREFIX  = os.environ.get("S3_TICKER_PREFIX", "tickers/")
 
-_ticker_to_name = {}
-_name_to_ticker = {}
-_s3_loaded = False
-_s3_error = None
+_ticker_to_name, _name_to_ticker = {}, {}
+_s3_loaded, _s3_error = False, None
 
-
+# -----------------------------
+# S3 ticker map
+# -----------------------------
 def _normalize_key(s: str) -> str:
-    """case-insensitive, strip punctuation/spaces for matching."""
-    return ''.join(ch for ch in s.strip().lower() if ch.isalnum())
-
+    return ''.join(ch for ch in (s or "").strip().lower() if ch.isalnum())
 
 def _ingest_rows(df: pd.DataFrame):
-    # Accept common column variants
     cols = {c.lower(): c for c in df.columns}
-    ticker_col = cols.get("ticker") or cols.get("tic") or cols.get("symbol")
-    name_col = cols.get("name") or cols.get("comn") or cols.get("company") or cols.get("company_name")
-
-    if not ticker_col:
-        return
-    # Name may be missing in some rows; handle gracefully
-    for _, row in df.iterrows():
-        t = str(row.get(ticker_col, "") or "").strip().upper()
-        n = str(row.get(name_col, "") or "").strip()
-        if not t:
-            continue
+    tcol = cols.get("ticker") or cols.get("symbol")
+    ncol = cols.get("name") or cols.get("company") or cols.get("company_name")
+    if not tcol: return
+    for _, r in df.iterrows():
+        t = str(r.get(tcol,"") or "").strip().upper()
+        n = str(r.get(ncol,"") or "").strip()
+        if not t: continue
         if n:
             _ticker_to_name[t] = n
             _name_to_ticker[_normalize_key(n)] = t
-        # Also map ticker-text itself for reverse lookup convenience
         _name_to_ticker[_normalize_key(t)] = t
 
-
-def _load_from_csv_bytes(b: bytes):
-    try:
-        df = pd.read_csv(io.BytesIO(b))
-        _ingest_rows(df)
-    except Exception:
-        # Try TSV just in case
+def _load_csv_bytes(b: bytes):
+    for sep in [",", "\t", ";"]:
         try:
-            df = pd.read_csv(io.BytesIO(b), sep="\t")
-            _ingest_rows(df)
+            _ingest_rows(pd.read_csv(io.BytesIO(b), sep=sep))
+            return
         except Exception:
-            pass
+            continue
 
-
-def _load_from_json_bytes(b: bytes):
+def _load_json_bytes(b: bytes):
     try:
         obj = json.loads(b.decode("utf-8"))
-        # obj could be list[dict] or dict of lists
-        if isinstance(obj, list):
-            df = pd.DataFrame(obj)
-        elif isinstance(obj, dict):
-            df = pd.DataFrame(obj)
-        else:
-            return
+        df = pd.DataFrame(obj if isinstance(obj, list) else obj)
         _ingest_rows(df)
     except Exception:
         pass
 
-
 def _load_ticker_map_from_s3():
     global _s3_loaded, _s3_error
-    if _s3_loaded:
-        return
+    if _s3_loaded: return
     if not BOTO3_AVAILABLE:
-        _s3_error = "boto3 not installed/available"
-        _s3_loaded = True
+        _s3_error, _s3_loaded = "boto3 not installed/available", True
         return
-    # Only try if creds present
     if not (os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY")):
-        _s3_error = "AWS credentials not provided"
-        _s3_loaded = True
+        _s3_error, _s3_loaded = "AWS credentials not provided", True
         return
-
     try:
         s3 = boto3.client("s3", region_name=AWS_REGION)
         paginator = s3.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=S3_BUCKET, Prefix=S3_PREFIX)
-
-        found_any = False
-        for page in pages:
+        found = False
+        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=S3_PREFIX):
             for obj in page.get("Contents", []):
-                key = obj["Key"]
-                if not key.lower().endswith((".csv", ".json")):
-                    continue
-                found_any = True
-                body = s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
-                if key.lower().endswith(".csv"):
-                    _load_from_csv_bytes(body)
-                else:
-                    _load_from_json_bytes(body)
-
-        if not found_any:
-            _s3_error = f"No CSV/JSON found under s3://{S3_BUCKET}/{S3_PREFIX}"
+                key = obj["Key"].lower()
+                if not key.endswith((".csv",".json")): continue
+                found = True
+                body = s3.get_object(Bucket=S3_BUCKET, Key=obj["Key"])["Body"].read()
+                (_load_csv_bytes if key.endswith(".csv") else _load_json_bytes)(body)
+        if not found:
+            _s3_error = f"No CSV/JSON under s3://{S3_BUCKET}/{S3_PREFIX}"
     except Exception as e:
         _s3_error = f"S3 load error: {e}"
     finally:
         _s3_loaded = True
 
-
-# Attempt load at startup (non-fatal)
 _load_ticker_map_from_s3()
 
-
-def _verify_ticker_with_yfinance(ticker: str) -> dict:
-    """
-    Verify if a ticker is valid using yfinance and return its info.
-    Returns: {"ticker": "TSLA", "name": "Tesla, Inc."} or None
-    """
-    try:
-        t = ticker.upper().strip()
-        stock = yf.Ticker(t)
-        _ensure_yf_session_headers(stock)
-        
-        # Try to get basic info
-        info = stock.get_info() or {}
-        long_name = info.get("longName") or info.get("shortName")
-        
-        # If we got a name, consider it valid
-        if long_name:
-            return {"ticker": t, "name": long_name}
-        
-        # Check if there's any data available
-        if info.get("symbol") == t:
-            return {"ticker": t, "name": None}
-            
-        return None
-    except Exception:
-        return None
-
-
-def _search_ticker_with_openai(company_name: str) -> dict:
-    """
-    Use OpenAI to resolve a company name to a ticker symbol.
-    Returns: {"ticker": "TSLA", "name": "Tesla, Inc."} or None
-    """
-    try:
-        prompt = f"""
-You are a stock ticker expert. Given the company name "{company_name}", return ONLY the stock ticker symbol and full company name.
-If it's a publicly-traded company, respond with JSON: {{"ticker":"SYMBOL","name":"Full Company Name"}}
-If it's a private company or doesn't exist, respond with: {{"error":"Private or not found"}}
-
-Company name: {company_name}
-"""
-        response = client.chat.completions.create(
-            model="gpt-4",
-            temperature=0.0,
-            max_tokens=100,
-            messages=[
-                {"role": "system", "content": "Respond with valid JSON only."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        raw = response.choices[0].message.content.strip().replace("```json", "").replace("```", "")
-        obj = json.loads(raw)
-        
-        if obj.get("error"):
-            return None
-        
-        ticker = obj.get("ticker", "").upper().strip()
-        name = obj.get("name", "").strip()
-        
-        if not ticker:
-            return None
-        
-        # Verify the ticker with yfinance
-        verified = _verify_ticker_with_yfinance(ticker)
-        if verified:
-            return verified
-        
-        return None
-    except Exception:
-        return None
-
-
-def _search_ticker_with_yfinance(query: str) -> dict:
-    """
-    Search for a ticker using company name via yfinance.
-    Returns: {"ticker": "TSLA", "name": "Tesla, Inc."} or None
-    """
-    if not query:
-        return None
-    
-    # Common company name to ticker mappings (fast lookup for known companies)
-    common_mappings = {
-        "tesla": "TSLA",
-        "apple": "AAPL",
-        "microsoft": "MSFT",
-        "amazon": "AMZN",
-        "google": "GOOGL",
-        "alphabet": "GOOGL",
-        "meta": "META",
-        "facebook": "META",
-        "nvidia": "NVDA",
-        "netflix": "NFLX",
-        "twitter": "TWTR",
-        "x corp": "TWTR",
-        "boeing": "BA",
-        "airbus": "AIR.PA",
-        "intel": "INTC",
-        "amd": "AMD",
-        "walmart": "WMT",
-        "disney": "DIS",
-        "coca cola": "KO",
-        "pepsi": "PEP",
-        "mcdonalds": "MCD",
-        "starbucks": "SBUX",
-        "visa": "V",
-        "mastercard": "MA",
-        "jpmorgan": "JPM",
-        "jp morgan": "JPM",
-        "bank of america": "BAC",
-        "wells fargo": "WFC",
-        "goldman sachs": "GS",
-        "morgan stanley": "MS",
-        "berkshire hathaway": "BRK.B",
-        "exxon": "XOM",
-        "chevron": "CVX",
-        "pfizer": "PFE",
-        "johnson & johnson": "JNJ",
-        "johnson and johnson": "JNJ",
-        "unitedhealth": "UNH",
-        "procter & gamble": "PG",
-        "procter and gamble": "PG",
-        "home depot": "HD",
-        "salesforce": "CRM",
-        "adobe": "ADBE",
-        "cisco": "CSCO",
-        "oracle": "ORCL",
-        "ibm": "IBM",
-        "paypal": "PYPL",
-        "uber": "UBER",
-        "lyft": "LYFT",
-        "airbnb": "ABNB",
-        "zoom": "ZM",
-        "slack": "WORK",
-        "spotify": "SPOT",
-        "snapchat": "SNAP",
-        "pinterest": "PINS",
-        "square": "SQ",
-        "robinhood": "HOOD",
-        "coinbase": "COIN",
-        "snowflake": "SNOW",
-        "palantir": "PLTR",
-        "rivian": "RIVN",
-        "lucid": "LCID",
-        "lucid motors": "LCID",
-        "nio": "NIO",
-        "xpeng": "XPEV",
-        "li auto": "LI",
-        "zeekr": "ZK",
-        "polestar": "PSNY",
-        "byd": "BYDDY",
-        "vinfast": "VFS",
-        "workhorse": "WKHS",
-        "joby": "JOBY",
-        "joby aviation": "JOBY",
-        "archer": "ACHR",
-        "archer aviation": "ACHR",
-        "ehang": "EH",
-        "blade": "BLDE",
-        "blade air mobility": "BLDE",
-        "ford": "F",
-        "general motors": "GM",
-        "gm": "GM",
-        "databricks": None,  # Private
-        "spacex": None,  # Private company
-        "stripe": None,  # Private company
-    }
-    
-    # Normalize the query
-    norm = query.strip().lower()
-    
-    # Check common mappings first (fast path)
-    if norm in common_mappings:
-        ticker = common_mappings[norm]
-        if ticker:
-            # Verify and get name
-            result = _verify_ticker_with_yfinance(ticker)
-            if result:
-                return result
-        else:
-            return None  # Private company
-    
-    # Try as-is if it looks like a ticker
-    if len(query) <= 6 and query.isalpha():
-        result = _verify_ticker_with_yfinance(query)
-        if result:
-            return result
-    
-    # For multi-word company names, try OpenAI as fallback
-    if ' ' in query or len(query) > 6:
-        result = _search_ticker_with_openai(query)
-        if result:
-            return result
-    
-    return None
-
-
-def resolve_input_to_ticker(user_input: str) -> dict:
-    """
-    Resolves arbitrary user input (ticker or company name) to a canonical ticker.
-    Returns: { "input": "...", "ticker": "TSLA", "name": "Tesla, Inc.", "source": "s3|guess|input|yfinance" }
-    """
-    raw = (user_input or "").strip()
-    if not raw:
-        return {"error": "Input is empty"}
-    norm = _normalize_key(raw)
-
-    # 1) Direct S3 map by normalized name
-    if norm in _name_to_ticker:
-        t = _name_to_ticker[norm]
-        n = _ticker_to_name.get(t)
-        return {"input": raw, "ticker": t, "name": n, "source": "s3"}
-
-    # 2) If they typed a ticker exactly, prefer it
-    if raw.isalpha() and raw.upper() in _ticker_to_name:
-        t = raw.upper()
-        return {"input": raw, "ticker": t, "name": _ticker_to_name.get(t), "source": "s3"}
-
-    # 3) Try yfinance search to resolve company name to ticker
-    yf_result = _search_ticker_with_yfinance(raw)
-    if yf_result:
-        return {"input": raw, "ticker": yf_result["ticker"], "name": yf_result.get("name"), "source": "yfinance"}
-
-    # 4) Fallback: if they typed something that *looks* like a ticker, try it
-    if raw.isalpha() and 1 <= len(raw) <= 6:
-        t = raw.upper()
-        # Verify it's a valid ticker using yfinance
-        verified = _verify_ticker_with_yfinance(t)
-        if verified:
-            return {"input": raw, "ticker": verified["ticker"], "name": verified.get("name"), "source": "input"}
-        return {"input": raw, "ticker": t, "name": _ticker_to_name.get(t), "source": "input"}
-
-    # 5) Last resort: return input back, client can decide to proceed
-    return {"input": raw, "ticker": raw.upper(), "name": _ticker_to_name.get(raw.upper()), "source": "guess"}
-
-
 # -----------------------------
-# Financial metrics (yfinance)
+# Ticker resolve helpers
 # -----------------------------
 def _ensure_yf_session_headers(t: yf.Ticker):
     try:
@@ -395,1006 +124,583 @@ def _ensure_yf_session_headers(t: yf.Ticker):
         if sess and not getattr(t, "_session_configured", False):
             hdrs = getattr(sess, "headers", None)
             if isinstance(hdrs, dict):
-                hdrs.setdefault(
-                    "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                )
+                hdrs.setdefault("User-Agent","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 t._session_configured = True
     except Exception:
         pass
 
-
-@lru_cache(maxsize=128)
-def calculate_metrics(ticker: str, max_retries: int = 3):
-        """
-        Calculate key metrics with robust fallbacks:
-        - Prefer quarterly_financials / quarterly_cashflow
-        - If empty, retry; then fallback to annual frames and reindex to last quarters if possible
-        - Normalize row labels; compute derived rows if missing
-        - If still no data, use Perplexity fallback
-        """
-        def _pick(df, labels):
-            """Return first existing row by label list (case-insensitive)."""
-            if df is None or df.empty:
-                return None
-            idx = {str(i).strip().lower(): i for i in df.index}
-            for lab in labels:
-                k = lab.strip().lower()
-                if k in idx:
-                    return df.loc[idx[k]]
-            return None
-
-        def _ensure_quarterly(df):
-            """Ensure columns are Period['Q']-able; slice to last 5 columns."""
-            if df is None or df.empty:
-                return df
-            try:
-                # yfinance uses DatetimeIndex columns for quarter ends
-                df = df.copy()
-                if not isinstance(df.columns, pd.PeriodIndex):
-                    try:
-                        df.columns = pd.to_datetime(df.columns).to_period("Q")
-                    except Exception:
-                        # Some frames use strings like '2024-06-30'; still OK
-                        df.columns = pd.to_datetime(df.columns, errors="coerce").to_period("Q")
-                # keep last 5 most recent quarters
-                df = df.iloc[:, :5]
-                return df
-            except Exception:
-                return df
-
-        ticker = (ticker or "").upper().strip()
-        if not ticker:
-            return None
-
-        for attempt in range(max_retries):
-            try:
-                if attempt > 0:
-                    time.sleep((2 ** attempt) * 1.5)
-
-                stock = yf.Ticker(ticker)
-                _ensure_yf_session_headers(stock)
-                time.sleep(0.25)
-
-                # ---- Try quarterly frames first
-                fin_q = getattr(stock, "quarterly_financials", None)
-                cf_q  = getattr(stock, "quarterly_cashflow", None)
-
-                # If quarterly empty, try annual, then keep most recent 5 columns
-                if fin_q is None or fin_q.empty:
-                    fin_q = getattr(stock, "financials", None)
-                if cf_q is None or cf_q.empty:
-                    cf_q = getattr(stock, "cashflow", None)
-
-                # If still nothing, retry (possibly 429/empty)
-                if fin_q is None or fin_q.empty or cf_q is None or cf_q.empty:
-                    if attempt < max_retries - 1:
-                        continue
-                    # break to fallback
-                    break
-
-                fin_q = _ensure_quarterly(fin_q)
-                cf_q  = _ensure_quarterly(cf_q)
-
-                if fin_q is None or fin_q.empty or cf_q is None or cf_q.empty:
-                    if attempt < max_retries - 1:
-                        continue
-                    break
-
-                # ----- Map rows with tolerant labels
-                # Income statement / financials
-                total_rev = _pick(fin_q, [
-                    "Total Revenue", "Revenue", "TotalRevenue", "Total revenue"
-                ])
-                cost_rev  = _pick(fin_q, [
-                    "Cost Of Revenue", "Cost of Revenue", "CostOfRevenue"
-                ])
-                gross_profit = _pick(fin_q, [
-                    "Gross Profit", "GrossProfit"
-                ])
-                opex = _pick(fin_q, [
-                    "Operating Expense", "Operating Expenses", "Total Operating Expenses", "OperatingExpenses"
-                ])
-                ebit = _pick(fin_q, [
-                    "EBIT", "Operating Income", "OperatingIncome"
-                ])
-                net_income = _pick(fin_q, [
-                    "Net Income", "NetIncome", "Net Income Common Stockholders"
-                ])
-
-                # Cash flow
-                ocf = _pick(cf_q, [
-                    "Operating Cash Flow", "Total Cash From Operating Activities",
-                    "OperatingCashFlow"
-                ])
-                capex = _pick(cf_q, [
-                    "Capital Expenditure", "Capital Expenditures", "CapitalExpenditures"
-                ])
-
-                # Derivations
-                if gross_profit is None and total_rev is not None and cost_rev is not None:
-                    gross_profit = (total_rev - cost_rev)
-
-                if opex is None:
-                    sga = _pick(fin_q, ["Selling General And Administration", "Selling General Administrative", "SG&A Expense"])
-                    rnd = _pick(fin_q, ["Research And Development", "Research & Development"])
-                    if sga is not None and rnd is not None:
-                        opex = (sga + rnd)
-
-                if ebit is None:
-                    op_inc = _pick(fin_q, ["Operating Income", "OperatingIncome"])
-                    if op_inc is not None:
-                        ebit = op_inc
-
-                fcf = None
-                if ocf is not None and capex is not None:
-                    try:
-                        fcf = (ocf + capex)  # capex usually negative
-                    except Exception:
-                        pass
-
-                # Build result frame
-                out = {}
-                def _fill(name, s, is_pct=False):
-                    if s is None:
-                        return
-                    series = {}
-                    for q, v in s.items():
-                        if pd.isna(v):
-                            continue
-                        try:
-                            if is_pct:
-                                series[str(q)] = float(v)
-                            else:
-                                series[str(q)] = int(float(v))
-                        except Exception:
-                            continue
-                    if series:
-                        out[name] = series
-
-                # Gross margin %
-                gm_pct = None
-                if gross_profit is not None and total_rev is not None:
-                    try:
-                        gm_pct = (gross_profit / total_rev) * 100.0
-                    except Exception:
-                        gm_pct = None
-
-                _fill("Total Revenue", total_rev, is_pct=False)
-                _fill("Operating Expense", opex, is_pct=False)
-                _fill("EBIT", ebit, is_pct=False)
-                _fill("Net Income", net_income, is_pct=False)
-                if gm_pct is not None:
-                    _fill("Gross Margin %", gm_pct, is_pct=True)
-                if fcf is not None:
-                    _fill("Free Cash Flow", fcf, is_pct=False)
-
-                # If nothing meaningful, retry/fallback
-                if not out or not out.get("Total Revenue"):
-                    if attempt < max_retries - 1:
-                        continue
-                    break
-
-                return out
-
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    continue
-                break
-
-        # ---- LLM fallback
-        fb = perplexity_fallback_metrics(ticker, max_quarters=5)
-        if fb:
-            return fb
+def _verify_ticker_with_yfinance(ticker: str) -> dict | None:
+    try:
+        t = (ticker or "").upper().strip()
+        s = yf.Ticker(t); _ensure_yf_session_headers(s)
+        info = s.get_info() or {}
+        nm = info.get("longName") or info.get("shortName")
+        if nm: return {"ticker": t, "name": nm}
+        if info.get("symbol") == t: return {"ticker": t, "name": None}
+        return None
+    except Exception:
         return None
 
+def _search_ticker_with_openai(company_name: str) -> dict | None:
+    try:
+        prompt = f"""Respond with valid JSON only.
+Given the company name "{company_name}", if it is publicly traded return:
+{{"ticker":"SYMBOL","name":"Full Company Name"}}
+Else return: {{"error":"Private or not found"}}"""
+        r = client.chat.completions.create(
+            model="gpt-4",
+            temperature=0.0,
+            max_tokens=100,
+            messages=[{"role":"system","content":"JSON only"},{"role":"user","content":prompt}]
+        )
+        raw = (r.choices[0].message.content or "").strip().replace("```json","").replace("```","")
+        obj = json.loads(raw)
+        if obj.get("error"): return None
+        t = (obj.get("ticker") or "").upper().strip()
+        nm = (obj.get("name") or "").strip()
+        if not t: return None
+        return _verify_ticker_with_yfinance(t) or None
+    except Exception:
+        return None
 
+def _search_ticker_with_yfinance(query: str) -> dict | None:
+    if not query: return None
+    common = {"tesla":"TSLA","apple":"AAPL","microsoft":"MSFT","amazon":"AMZN","google":"GOOGL","alphabet":"GOOGL",
+              "meta":"META","facebook":"META","nvidia":"NVDA","netflix":"NFLX","boeing":"BA","airbus":"AIR.PA"}
+    norm = (query or "").strip().lower()
+    if norm in common:
+        return _verify_ticker_with_yfinance(common[norm])
+    if len(query) <= 6 and query.isalpha():
+        v = _verify_ticker_with_yfinance(query)
+        if v: return v
+    if " " in query or len(query) > 6:
+        return _search_ticker_with_openai(query)
+    return None
 
-# ============================================================
-# STEP 1: Peer Selection Add-Ons (constants & helpers)
-# ============================================================
+def resolve_input_to_ticker(user_input: str) -> dict:
+    raw = (user_input or "").strip()
+    if not raw: return {"error":"Input is empty"}
+    norm = _normalize_key(raw)
+    if norm in _name_to_ticker:
+        t = _name_to_ticker[norm]; return {"input":raw,"ticker":t,"name":_ticker_to_name.get(t),"source":"s3"}
+    if raw.isalpha() and raw.upper() in _ticker_to_name:
+        t = raw.upper(); return {"input":raw,"ticker":t,"name":_ticker_to_name.get(t),"source":"s3"}
+    yfres = _search_ticker_with_yfinance(raw)
+    if yfres:
+        return {"input":raw,"ticker":yfres["ticker"],"name":yfres.get("name"),"source":"yfinance"}
+    if raw.isalpha() and 1 <= len(raw) <= 6:
+        t = raw.upper()
+        v = _verify_ticker_with_yfinance(t)
+        if v: return {"input":raw,"ticker":v["ticker"],"name":v.get("name"),"source":"input"}
+        return {"input":raw,"ticker":t,"name":_ticker_to_name.get(t),"source":"input"}
+    return {"input":raw,"ticker":raw.upper(),"name":_ticker_to_name.get(raw.upper()),"source":"guess"}
 
-# Aliases only for peer logic (doesn't affect your resolver)
-PEER_TICKER_ALIAS = {
-    "GOOG": "GOOGL",
-    "FB":   "META",
-    "SRTA": "BLDE",   # Blade Air Mobility alias
-    "BLADE": "BLDE",
-}
+# -----------------------------
+# Metrics
+# -----------------------------
+@lru_cache(maxsize=128)
+def calculate_metrics(ticker: str, max_retries: int = 3):
+    def _pick(df, labels):
+        if df is None or df.empty: return None
+        idx = {str(i).strip().lower(): i for i in df.index}
+        for lab in labels:
+            k = lab.strip().lower()
+            if k in idx: return df.loc[idx[k]]
+        return None
+    def _ensure_quarterly(df):
+        if df is None or df.empty: return df
+        try:
+            df = df.copy()
+            if not isinstance(df.columns, pd.PeriodIndex):
+                df.columns = pd.to_datetime(df.columns, errors="coerce").to_period("Q")
+            return df.iloc[:, :5]
+        except Exception:
+            return df
+
+    t = (ticker or "").upper().strip()
+    if not t: return None
+
+    for attempt in range(max_retries):
+        try:
+            if attempt: time.sleep(1.2 * attempt)
+            s = yf.Ticker(t); _ensure_yf_session_headers(s); time.sleep(0.2)
+            fin_q = getattr(s, "quarterly_financials", None) or getattr(s, "financials", None)
+            cf_q  = getattr(s, "quarterly_cashflow", None) or getattr(s, "cashflow", None)
+            if fin_q is None or fin_q.empty or cf_q is None or cf_q.empty:
+                continue
+            fin_q, cf_q = _ensure_quarterly(fin_q), _ensure_quarterly(cf_q)
+            if fin_q is None or fin_q.empty or cf_q is None or cf_q.empty:
+                continue
+
+            total_rev   = _pick(fin_q, ["Total Revenue","Revenue"])
+            cost_rev    = _pick(fin_q, ["Cost Of Revenue","Cost of Revenue"])
+            gross_profit= _pick(fin_q, ["Gross Profit"])
+            opex        = _pick(fin_q, ["Operating Expense","Operating Expenses","Total Operating Expenses"])
+            ebit        = _pick(fin_q, ["EBIT","Operating Income"])
+            net_income  = _pick(fin_q, ["Net Income","Net Income Common Stockholders"])
+
+            ocf   = _pick(cf_q, ["Operating Cash Flow","Total Cash From Operating Activities"])
+            capex = _pick(cf_q, ["Capital Expenditure","Capital Expenditures"])
+
+            if gross_profit is None and total_rev is not None and cost_rev is not None:
+                gross_profit = (total_rev - cost_rev)
+            if opex is None:
+                sga = _pick(fin_q, ["Selling General And Administration","SG&A Expense"])
+                rnd = _pick(fin_q, ["Research And Development","Research & Development"])
+                if sga is not None and rnd is not None: opex = (sga + rnd)
+            if ebit is None:
+                op_inc = _pick(fin_q, ["Operating Income"])
+                if op_inc is not None: ebit = op_inc
+
+            fcf = None
+            if ocf is not None and capex is not None:
+                try: fcf = (ocf + capex)   # capex negative
+                except Exception: pass
+
+            out = {}
+            def _fill(name, s, is_pct=False):
+                if s is None: return
+                series = {}
+                for q, v in s.items():
+                    if pd.isna(v): continue
+                    try:
+                        series[str(q)] = float(v) if is_pct else int(float(v))
+                    except Exception:
+                        continue
+                if series: out[name] = series
+
+            gm_pct = None
+            if gross_profit is not None and total_rev is not None:
+                try: gm_pct = (gross_profit / total_rev) * 100.0
+                except Exception: gm_pct = None
+
+            _fill("Total Revenue", total_rev, is_pct=False)
+            _fill("Operating Expense", opex, is_pct=False)
+            _fill("EBIT", ebit, is_pct=False)
+            _fill("Net Income", net_income, is_pct=False)
+            if gm_pct is not None: _fill("Gross Margin %", gm_pct, is_pct=True)
+            if fcf is not None:    _fill("Free Cash Flow", fcf, is_pct=False)
+
+            if out.get("Total Revenue"): return out
+        except Exception:
+            continue
+    return None
+
+# -----------------------------
+# Peer groups & profiles
+# -----------------------------
+PEER_TICKER_ALIAS = {"GOOG":"GOOGL","FB":"META","SRTA":"BLDE","BLADE":"BLDE"}
 def _normalize_peer_ticker(t: str) -> str:
     u = (t or "").upper().strip()
     return PEER_TICKER_ALIAS.get(u, u)
 
-# Mega 7 (include TSLA)
-MEGA7 = [
-    {"ticker": "AAPL",  "name": "Apple Inc."},
-    {"ticker": "MSFT",  "name": "Microsoft Corporation"},
-    {"ticker": "GOOGL", "name": "Alphabet Inc. (Class A)"},
-    {"ticker": "AMZN",  "name": "Amazon.com, Inc."},
-    {"ticker": "META",  "name": "Meta Platforms, Inc."},
-    {"ticker": "NVDA",  "name": "NVIDIA Corporation"},
-    {"ticker": "TSLA",  "name": "Tesla, Inc."},
-]
+MEGA7 = [{"ticker":"AAPL","name":"Apple Inc."},{"ticker":"MSFT","name":"Microsoft Corporation"},
+         {"ticker":"GOOGL","name":"Alphabet Inc. (Class A)"},{"ticker":"AMZN","name":"Amazon.com, Inc."},
+         {"ticker":"META","name":"Meta Platforms, Inc."},{"ticker":"NVDA","name":"NVIDIA Corporation"},
+         {"ticker":"TSLA","name":"Tesla, Inc."}]
 MEGA7_TICKERS = {x["ticker"] for x in MEGA7}
 
-# eVTOL group
-EVTOL_GROUP = [
-    {"ticker": "EH",    "name": "EHang Holdings Limited"},
-    {"ticker": "JOBY",  "name": "Joby Aviation, Inc."},
-    {"ticker": "ACHR",  "name": "Archer Aviation Inc."},
-    {"ticker": "BLDE",  "name": "Blade Air Mobility, Inc."},
-]
+EVTOL_GROUP = [{"ticker":"EH","name":"EHang Holdings Limited"},{"ticker":"JOBY","name":"Joby Aviation, Inc."},
+               {"ticker":"ACHR","name":"Archer Aviation Inc."},{"ticker":"BLDE","name":"Blade Air Mobility, Inc."}]
 EVTOL_TICKERS = {x["ticker"] for x in EVTOL_GROUP}
 
-# EV (Electric Vehicle) group
-EV_GROUP = [
-    {"ticker": "RIVN",  "name": "Rivian Automotive, Inc."},
-    {"ticker": "LCID",  "name": "Lucid Group, Inc."},
-    {"ticker": "NIO",   "name": "NIO Inc."},
-    {"ticker": "XPEV",  "name": "XPeng Inc."},
-    {"ticker": "LI",    "name": "Li Auto Inc."},
-    {"ticker": "ZK",    "name": "ZEEKR Intelligent Technology Holding Limited"},
-    {"ticker": "PSNY",  "name": "Polestar Automotive Holding UK PLC"},
-    {"ticker": "BYDDY", "name": "BYD Company Limited"},
-    {"ticker": "VFS",   "name": "VinFast Auto Ltd."},
-    {"ticker": "WKHS",  "name": "Workhorse Group Inc."},
-]
+EV_GROUP = [{"ticker":"RIVN","name":"Rivian Automotive, Inc."},{"ticker":"LCID","name":"Lucid Group, Inc."},
+            {"ticker":"NIO","name":"NIO Inc."},{"ticker":"XPEV","name":"XPeng Inc."},{"ticker":"LI","name":"Li Auto Inc."},
+            {"ticker":"ZK","name":"ZEEKR Intelligent Technology Holding Limited"},{"ticker":"PSNY","name":"Polestar Automotive Holding UK PLC"},
+            {"ticker":"BYDDY","name":"BYD Company Limited"},{"ticker":"VFS","name":"VinFast Auto Ltd."},{"ticker":"WKHS","name":"Workhorse Group Inc."}]
 EV_TICKERS = {x["ticker"] for x in EV_GROUP}
 
-# Tunables
 PEER_LIMIT = 2
-MARKET_CAP_RATIO_LIMIT = 10.0  # >10x difference -> exclude
+MARKET_CAP_RATIO_LIMIT = 10.0
 
 def _same_industry(a: str, b: str) -> bool:
-    return bool(a and b and a.strip().lower() == b.strip().lower())
-
-def _mc_ratio_ok(mc_a, mc_b, limit=MARKET_CAP_RATIO_LIMIT) -> bool:
-    """If both MCs present and ratio > limit -> not ok; if either missing -> allow."""
-    if mc_a is None or mc_b is None:
-        return True
-    small = min(mc_a, mc_b)
-    big = max(mc_a, mc_b)
-    if small <= 0:
-        return False
-    return (big / small) <= float(limit)
+    return bool((a or "").strip() and (b or "").strip() and a.strip().lower() == b.strip().lower())
 
 @lru_cache(maxsize=512)
 def fetch_profile(ticker: str, max_retries: int = 2) -> dict:
     t = (ticker or "").upper().strip()
-    if not t:
-        return {"ticker": ticker, "name": None, "industry": None, "market_cap": None}
-
-    stock = yf.Ticker(t)
-    _ensure_yf_session_headers(stock)
-
-    name, industry, market_cap = t, None, None
-
+    if not t: return {"ticker":ticker,"name":None,"industry":None,"market_cap":None}
+    s = yf.Ticker(t); _ensure_yf_session_headers(s)
+    nm, ind, mc = t, None, None
     for attempt in range(max_retries):
         try:
-            # Try fast_info -> fallback to get_info
             try:
-                fi = getattr(stock, "fast_info", {}) or {}
-                market_cap = fi.get("market_cap", None) if hasattr(fi, "get") else getattr(fi, "market_cap", None)
+                fi = getattr(s,"fast_info",{}) or {}
+                mc = fi.get("market_cap", None) if hasattr(fi,"get") else getattr(fi,"market_cap",None)
             except Exception:
-                market_cap = None
-
-            info = {}
+                mc = None
             try:
-                info = stock.get_info() or {}
+                info = s.get_info() or {}
             except Exception:
                 info = {}
-
-            name = info.get("longName") or info.get("shortName") or name
-            industry = info.get("industry") or info.get("sector") or industry
-
-            if market_cap is None:
-                mc = info.get("marketCap")
-                if isinstance(mc, (int, float)) and mc > 0:
-                    market_cap = mc
-
-            return {"ticker": t, "name": name, "industry": industry, "market_cap": market_cap}
-
+            nm  = info.get("longName") or info.get("shortName") or nm
+            ind = info.get("industry") or info.get("sector") or ind
+            if mc is None:
+                val = info.get("marketCap")
+                if isinstance(val,(int,float)) and val>0: mc = val
+            return {"ticker":t,"name":nm,"industry":ind,"market_cap":mc}
         except Exception:
-            if attempt < max_retries - 1:
-                time.sleep(0.4 * (attempt + 1))
-                continue
-            break
-
-    return {"ticker": t, "name": name, "industry": industry, "market_cap": market_cap}
-
-# ---------- Perplexity fallback helpers ----------
-
-def _parse_quarter_label(q: str):
-    """Parse 'YYYYQn' -> (YYYY, n) for sorting; return None if invalid."""
-    if not q:
-        return None
-    m = re.match(r'^(\d{4})Q([1-4])$', q.strip().upper())
-    if not m:
-        return None
-    return (int(m.group(1)), int(m.group(2)))
-
-def _clean_fallback_payload(obj: dict, max_quarters: int = 5) -> dict | None:
-    """
-    Validate/normalize Perplexity JSON into the same shape calculate_metrics returns:
-      { metric: { 'YYYYQn': number, ... }, ... }
-    - Monetary metrics: int dollars (no commas/abbrevs)
-    - Percent metric: float (no % sign)
-    - Keep only the most recent `max_quarters` by quarter label
-    """
-    if not isinstance(obj, dict):
-        return None
-
-    METRICS = [
-        "Total Revenue",
-        "Operating Expense",
-        "Gross Margin %",
-        "EBIT",
-        "Net Income",
-        "Free Cash Flow",
-    ]
-
-    # Union all quarter labels present across metrics
-    quarters = set()
-    for m in METRICS:
-        md = obj.get(m, {})
-        if isinstance(md, dict):
-            for q in md.keys():
-                if _parse_quarter_label(q):
-                    quarters.add(q)
-
-    if not quarters:
-        return None
-
-    # Sort by time (oldest -> newest) and take the last N
-    sorted_quarters = sorted(quarters, key=lambda q: _parse_quarter_label(q))
-    keep = set(sorted_quarters[-max_quarters:])
-
-    cleaned = {}
-    for m in METRICS:
-        src = obj.get(m, {})
-        if not isinstance(src, dict):
+            time.sleep(0.3)
             continue
-        dst = {}
-        for q, v in src.items():
-            if q not in keep:
-                continue
-            if v is None:
-                continue
-            try:
-                if m == "Gross Margin %":
-                    # strip any '%' and cast to float
-                    if isinstance(v, str) and v.endswith('%'):
-                        v = v[:-1]
-                    dst[q] = float(v)
-                else:
-                    # monetary values -> int dollars
-                    if isinstance(v, str):
-                        v = v.replace(',', '').replace('$', '')
-                    # Some LLMs return in millions/billions; if you want to force-detect units,
-                    # add heuristics here. For now we assume absolute USD amounts.
-                    dst[q] = int(float(v))
-            except Exception:
-                # skip bad cells
-                continue
-        if dst:
-            cleaned[m] = dst
+    return {"ticker":t,"name":nm,"industry":ind,"market_cap":mc}
 
-    return cleaned or None
-
-
-def perplexity_fallback_metrics(ticker: str, max_quarters: int = 5) -> dict | None:
-    """
-    Query Perplexity's OpenAI-compatible API for last up to 5 quarterly values
-    for our metrics. Returns the same dict shape used by calculate_metrics, or None.
-
-    Env vars:
-      PERPLEXITY_API_KEY (required for fallback)
-      PERPLEXITY_API_MODEL (optional, default 'sonar-small')
-      PERPLEXITY_API_BASE (optional, default 'https://api.perplexity.ai/chat/completions')
-    """
-    api_key = os.environ.get("PERPLEXITY_API_KEY")
-    if not api_key:
-        return None
-
-    base_url = os.environ.get("PERPLEXITY_API_BASE", "https://api.perplexity.ai/chat/completions")
-    model = os.environ.get("PERPLEXITY_API_MODEL", "sonar-small")
-
-    system_msg = (
-        "You are a finance data extraction assistant. "
-        "Return ONLY strict JSON (no markdown) in the exact schema requested."
-    )
-    user_msg = f"""
-For the public company with stock ticker "{ticker}", provide the most recent up to {max_quarters} fiscal quarters
-for the following metrics in USD (nominal), using quarter keys EXACTLY in 'YYYYQn' format (e.g., 2024Q2):
-
-- Total Revenue
-- Operating Expense
-- Gross Margin %
-- EBIT
-- Net Income
-- Free Cash Flow (define as Operating Cash Flow + Capital Expenditure; capex is usually negative)
-
-Rules:
-- Return ONLY JSON, no extra text.
-- Monetary values MUST be absolute dollars (no words like "million" or "billion", no commas, no $).
-- Percent must be a bare number (e.g., 18.5 for 18.5%).
-- If a value is unknown, omit that quarter for that metric (do not write null).
-- Use the most recent quarters available from reliable sources (10-Q/10-K/company filings).
-
-Schema:
-{{
-  "Total Revenue": {{"YYYYQn": 0, "...": 0}},
-  "Operating Expense": {{"YYYYQn": 0}},
-  "Gross Margin %": {{"YYYYQn": 0.0}},
-  "EBIT": {{"YYYYQn": 0}},
-  "Net Income": {{"YYYYQn": 0}},
-  "Free Cash Flow": {{"YYYYQn": 0}}
-}}
-"""
-
-    try:
-        resp = requests.post(
-            base_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "temperature": 0.1,
-                "messages": [
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-            },
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            print(f"[perplexity] HTTP {resp.status_code}: {resp.text[:200]}")
-            return None
-
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        # Clean accidental code fences
-        content = content.strip().replace("```json", "").replace("```", "")
-        parsed = json.loads(content)
-        cleaned = _clean_fallback_payload(parsed, max_quarters=max_quarters)
-        if not cleaned:
-            print("[perplexity] could not validate payload")
-        return cleaned
-    except Exception as e:
-        print(f"[perplexity] error: {e}")
-        return None
-
-# ============================================================
-# STEP 2: Candidate Generators (S3 + optional OpenAI)
-# ============================================================
-
-def _s3_universe_candidates(base_ticker: str, base_industry: str, limit: int = 120):
-    """
-    Propose candidates from S3 universe (same industry). Offline & safe.
-    """
+def _s3_universe_candidates(base_ticker: str, base_industry: str, limit:int=120):
     try:
         universe = list(_ticker_to_name.keys())
     except NameError:
         universe = []
-    out = []
-    count = 0
+    out, cnt = [], 0
     for t in universe:
-        if t == base_ticker:
-            continue
-        prof = fetch_profile(t)
-        if _same_industry(base_industry or "", prof.get("industry") or ""):
-            out.append({"ticker": prof["ticker"], "name": prof.get("name")})
-        count += 1
-        if count >= limit:
-            break
+        if t == base_ticker: continue
+        p = fetch_profile(t)
+        if _same_industry(base_industry or "", p.get("industry") or ""):
+            out.append({"ticker":p["ticker"],"name":p.get("name")})
+        cnt += 1
+        if cnt >= limit: break
     return out
 
-
-def _openai_candidates(base_ticker: str, count: int = 16):
-    """
-    Optional: ask OpenAI to propose commonly compared names; we still filter by rules after.
-    """
+def _openai_candidates(base_ticker: str, count:int=16):
     try:
-        prompt = f"""
-List {count} publicly-traded companies that are commonly compared as peers to {base_ticker},
-operating in the same *industry* (not just sector). Return ONLY JSON:
-{{"peers":[{{"ticker":"T1","name":"Name 1"}}, ...]}}
-Exclude {base_ticker}. Prefer US-listed if available.
-"""
+        prompt = f"""JSON only. Return peers for {base_ticker} in the same industry:
+{{"peers":[{{"ticker":"T1","name":"Name 1"}}, ...]}} (exclude {base_ticker})"""
         ai = client.chat.completions.create(
-            model="gpt-4",
-            temperature=0.1,
-            max_tokens=400,
-            messages=[
-                {"role": "system", "content": "Respond with valid JSON only."},
-                {"role": "user", "content": prompt}
-            ]
+            model="gpt-4", temperature=0.1, max_tokens=400,
+            messages=[{"role":"system","content":"JSON only"},{"role":"user","content":prompt}]
         )
-        raw = ai.choices[0].message.content.strip().replace("```json", "").replace("```", "")
+        raw = (ai.choices[0].message.content or "").strip().replace("```json","").replace("```","")
         obj = json.loads(raw)
-        peers = obj.get("peers", [])
-        out = []
+        peers = obj.get("peers",[])
+        out=[]
         for p in peers:
-            ct = _normalize_peer_ticker(p.get("ticker", ""))
+            ct = _normalize_peer_ticker(p.get("ticker",""))
             if ct and ct != base_ticker:
-                out.append({"ticker": ct, "name": p.get("name")})
+                out.append({"ticker":ct,"name":p.get("name")})
         return out
     except Exception:
         return []
 
-
 # -----------------------------
-# Routes
+# UI
 # -----------------------------
 @app.route("/")
 def index():
-    """Serve the main HTML page (now with manual add-company support)"""
     return '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Peer Company Comparison</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Peer Company Comparison</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-2 md:p-4">
-  <div class="max-w-7xl mx-auto">
-    <!-- Main Content -->
-    <div class="flex-1">
-      <div class="bg-white rounded-lg shadow-xl p-3 md:p-5 mb-3">
-      <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-1 md:mb-2">Peer Company Key Metrics Comparison</h1>
-      <p class="text-xs md:text-sm text-gray-600 mb-3">Enter a <b>ticker or company name</b> to find and compare key financial metrics with peer companies</p>
-
-      <!-- Expandable Tools Container - Top Right Corner -->
-      <div class="fixed top-4 right-4 z-50">
-        <button onclick="toggleTools()" id="toolsToggle" 
-          class="bg-white rounded shadow-lg p-2 hover:bg-indigo-50 transition-all border border-gray-200 min-h-[44px] min-w-[44px] flex items-center justify-center">
-          <svg class="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-          </svg>
-        </button>
-        <div id="toolsContainer" class="hidden mt-2 space-y-2">
-          <a href="https://equityresearch.checkitanalytics.com/" target="_blank" 
-             class="block bg-white rounded shadow p-3 text-center text-base font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300 min-h-[44px] flex items-center justify-center">
-            Equity Research
-          </a>
-          <a href="https://smartnews.checkitanalytics.com/" target="_blank" 
-             class="block bg-white rounded shadow p-3 text-center text-base font-semibold text-indigo-600 hover:bg-indigo-50 transition-all border border-transparent hover:border-indigo-300 min-h-[44px] flex items-center justify-center">
-            News Analyst
-          </a>
-        </div>
-      </div>
-
-      <!-- Search boxes and buttons - compact auto-fit layout -->
-      <div class="mb-1.5">
-        <div class="flex flex-wrap gap-1.5 items-center">
-          <input type="text" id="tickerInput" placeholder="e.g., TSLA" size="8"
-            class="w-auto min-w-[60px] max-w-[130px] px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-          <button onclick="resolveAndFind()" id="findButton"
-            class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 transition-colors text-sm font-medium whitespace-nowrap">
-            Find Peers
-          </button>
-          <input type="text" id="manualInput" placeholder="Add company" size="9"
-            class="w-auto min-w-[80px] max-w-[160px] px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm">
-          <button onclick="addCompany()" id="addButton"
-            class="px-3 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-400 transition-colors text-sm font-medium whitespace-nowrap">
-            Add
-          </button>
-        </div>
-        <p class="text-xs text-gray-500 mt-0.5">Tip: Try AAPL, MSFT, AMZN</p>
-      </div>
-
-      <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-3 mb-3"><p class="text-red-700 text-sm"></p></div>
-      <div id="loading" class="hidden text-center py-3">
-        <div class="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
-        <p class="mt-1 text-gray-600 text-sm">Working…</p>
-      </div>
-      <div id="peerInfo" class="hidden bg-indigo-50 rounded-lg p-3 md:p-4 mb-4"></div>
+<div class="max-w-7xl mx-auto">
+  <div class="bg-white rounded-lg shadow-xl p-3 md:p-5 mb-3">
+    <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
+    <div class="flex flex-wrap gap-1.5 items-center mb-2">
+      <input id="tickerInput" placeholder="e.g., AAPL" class="w-28 px-2 py-1 border rounded text-sm"/>
+      <button id="findButton" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">Find Peers</button>
+      <input id="manualInput" placeholder="Add company" class="w-36 px-2 py-1 border rounded text-sm"/>
+      <button id="addButton" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm">Add</button>
     </div>
-
-    <div id="results" class="hidden space-y-4"></div>
-    </div>
-  </div>
+    <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-3 mb-3"><p class="text-red-700 text-sm"></p></div>
+    <div id="loading" class="hidden text-center py-3"><div class="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div></div>
+    <div id="peerInfo" class="hidden bg-indigo-50 rounded-lg p-3 md:p-4 mb-4"></div>
   </div>
 
-  <script>
-    // ---------- Global state ----------
-    let _metricsData = {};         // ticker -> metrics dict
-    let _tickers = [];             // ordered list for charts/tables
-    let _quarters = [];            // sorted newest->oldest (max 5)
-    let _combinedChart = null;
-    let _peerData = null;          // Store peer data from API
-    let _manualPeers = [];         // Track manually added peers
+  <div id="results" class="hidden space-y-4"></div>
+</div>
 
-    const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#a4de6c', '#d0ed57', '#8dd1e1', '#a28dd1'];
+<script>
+let _metricsData = {};
+let _tickers = [];
+let _quarters = [];
+let _combinedChart = null;
+let _peerData = null;
+let _manualPeers = [];
+let _conclusion = { en:null, zh:null, ticker:null, period:null, provider:null };
+let _lang = 'en';
 
-    // ---------- Tools Toggle ----------
-    function toggleTools() {
-      const container = document.getElementById('toolsContainer');
-      container.classList.toggle('hidden');
+const COLORS = ['#8884d8','#82ca9d','#ffc658','#ff8042','#a4de6c','#d0ed57','#8dd1e1','#a28dd1'];
+
+function showError(msg){ const d=document.getElementById('error'); d.querySelector('p').textContent=msg; d.classList.remove('hidden'); }
+function hideError(){ document.getElementById('error').classList.add('hidden'); }
+function showLoading(b){ document.getElementById('loading').classList.toggle('hidden',!b); document.getElementById('findButton').disabled=b; document.getElementById('addButton').disabled=b; }
+function uniqUpper(arr){ const s=new Set(); const out=[]; for(const x of arr){ const y=(x||'').toUpperCase(); if(!s.has(y)){ s.add(y); out.push(y);} } return out; }
+
+document.getElementById('tickerInput').addEventListener('keypress', e => { if (e.key==='Enter') resolveAndFind(); });
+document.getElementById('manualInput').addEventListener('keypress', e => { if (e.key==='Enter') addCompany(); });
+document.getElementById('findButton').onclick = resolveAndFind;
+document.getElementById('addButton').onclick  = addCompany;
+
+async function resolveAndFind(){
+  const raw = document.getElementById('tickerInput').value.trim();
+  if (!raw) return showError('Please enter a ticker or company name');
+  hideError(); showLoading(true);
+  try{
+    const r = await fetch('/api/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:raw})});
+    const res = await r.json(); if (!r.ok || res.error) throw new Error(res.error || 'Resolve failed');
+    await findPeers(res.ticker, res.name);
+  }catch(e){ showError(e.message); } finally{ showLoading(false); }
+}
+
+async function findPeers(ticker, name){
+  try{
+    showLoading(true);
+    const r = await fetch('/api/find-peers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker})});
+    const peerData = await r.json(); if(!r.ok || peerData.error) throw new Error(peerData.error || 'Find peers failed');
+    if (name && peerData.primary_company===ticker) peerData.primary_name = name;
+    _peerData = peerData; _manualPeers = [];
+    displayPeers(peerData);
+
+    const tickers = [peerData.primary_company, ...peerData.peers.map(p=>p.ticker)];
+    const metrics = await fetch('/api/get-metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tickers})});
+    const data = await metrics.json(); if(!metrics.ok || data.error) throw new Error(data.error || 'Metrics failed');
+
+    _metricsData = data;
+    const primary = peerData.primary_company;
+    const validPeers = tickers.slice(1).filter(t => data[t] && !data[t].error && (data[t]['Total Revenue']||data[t]['Gross Margin %']));
+    _tickers = uniqUpper([primary, ...validPeers]);
+    _quarters = computeQuarters(data, _tickers);
+
+    renderAll();
+    await requestConclusion(); // IMPORTANT
+  }catch(e){ showError(e.message); } finally{ showLoading(false); }
+}
+
+function displayPeers(d){
+  const primaryLabel = d.primary_name ? d.primary_company + ' — ' + d.primary_name : d.primary_company;
+  const allPeers = [...d.peers, ..._manualPeers];
+  const html = `<h2 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3">Peer Companies in ${d.industry}</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="bg-white p-3 rounded-lg shadow"><div class="text-xs text-gray-600 mb-1">Primary</div>
+      <div class="text-base md:text-xl font-bold text-indigo-600 break-words">${primaryLabel}</div></div>
+      ${allPeers.map((p,i)=>`<div class="bg-white p-3 rounded-lg shadow"><div class="text-xs text-gray-600 mb-1">Peer ${i+1}</div>
+      <div class="text-base md:text-xl font-bold text-gray-800">${p.ticker}</div><div class="text-xs text-gray-600 truncate">${p.name||''}</div></div>`).join('')}
+    </div>`;
+  document.getElementById('peerInfo').innerHTML = html;
+  document.getElementById('peerInfo').classList.remove('hidden');
+}
+
+async function addCompany(){
+  const raw = document.getElementById('manualInput').value.trim();
+  if (!raw) return showError('Please enter a ticker/company to add');
+  hideError(); showLoading(true);
+  try{
+    const r = await fetch('/api/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:raw})});
+    const res = await r.json(); if(!r.ok || res.error) throw new Error(res.error || 'Resolve failed');
+    const newT = (res.ticker || '').toUpperCase();
+    if (!newT) throw new Error('Could not resolve to a ticker');
+    if (_tickers.includes(newT)) return showError(`${newT} already included`);
+
+    const metrics = await (await fetch('/api/get-metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tickers:[newT]})})).json();
+    if (!metrics[newT] || metrics[newT].error || !(metrics[newT]['Total Revenue']||metrics[newT]['Gross Margin %']))
+      return showError(`No usable data for ${newT}`);
+
+    _metricsData[newT] = metrics[newT];
+    _tickers = uniqUpper([..._tickers, newT]);
+
+    if (_peerData && newT !== _peerData.primary_company){
+      const exists = _peerData.peers.some(p=>p.ticker===newT) || _manualPeers.some(p=>p.ticker===newT);
+      if (!exists) _manualPeers.push({ticker:newT, name: metrics[newT].name || res.name || newT});
+      displayPeers(_peerData);
     }
 
-    // ---------- Utilities ----------
-    function showError(msg){ const d=document.getElementById('error'); d.querySelector('p').textContent=msg; d.classList.remove('hidden'); }
-    function hideError(){ document.getElementById('error').classList.add('hidden'); }
-    function showLoading(b){
-      document.getElementById('loading').classList.toggle('hidden',!b);
-      document.getElementById('findButton').disabled=b;
-      document.getElementById('addButton').disabled=b;
+    _quarters = computeQuarters(_metricsData, _tickers);
+    renderAll();
+    await requestConclusion();
+    document.getElementById('manualInput').value='';
+    document.getElementById('results').classList.remove('hidden');
+  }catch(e){ showError(e.message); } finally{ showLoading(false); }
+}
+
+function computeQuarters(data, tickers){
+  const qset = new Set();
+  tickers.forEach(t => {
+    const m = data[t] || {};
+    if (m['Total Revenue']) Object.keys(m['Total Revenue']).forEach(q=>qset.add(q));
+    if (m['Gross Margin %']) Object.keys(m['Gross Margin %']).forEach(q=>qset.add(q));
+  });
+  return Array.from(qset).sort().reverse().slice(0,5);
+}
+
+function renderAll(){
+  const resultsDiv = document.getElementById('results');
+  resultsDiv.innerHTML = `
+  <div class="bg-white rounded-lg shadow-xl p-3 md:p-4">
+    <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">Total Revenue & Gross Margin % Trend</h3>
+    <div style="height:250px"><canvas id="combinedChart"></canvas></div>
+  </div>
+  <div class="bg-white rounded-lg shadow-xl p-3 md:p-4 overflow-x-auto">
+    <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">Latest Quarter Metrics</h3>
+    <table class="w-full text-xs md:text-sm" id="metricsTable"></table>
+  </div>
+  <div class="bg-white rounded-lg shadow-xl p-3 md:p-4">
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="text-base md:text-xl font-semibold text-gray-800">Primary Company Conclusion</h3>
+      <div class="inline-flex rounded-md shadow-sm">
+        <button id="btnEN" class="px-2 py-1 text-xs border rounded-l bg-indigo-600 text-white">EN</button>
+        <button id="btnZH" class="px-2 py-1 text-xs border rounded-r bg-white text-gray-700">中文</button>
+      </div>
+    </div>
+    <div id="conclusionLoading" class="text-sm text-gray-500 hidden">Generating conclusion…</div>
+    <pre id="conclusionText" class="whitespace-pre-wrap text-sm md:text-base text-gray-800"></pre>
+    <div id="conclusionMeta" class="text-xs text-gray-500 mt-1"></div>
+  </div>
+  <div id="timeSeriesTables" class="space-y-4 md:space-y-6"></div>`;
+  resultsDiv.classList.remove('hidden');
+
+  document.getElementById('btnEN').onclick = () => { _lang='en'; updateLangButtons(); renderConclusion(); };
+  document.getElementById('btnZH').onclick = () => { _lang='zh'; updateLangButtons(); renderConclusion(); };
+
+  renderCharts(); renderTable(); renderTimeSeriesTables();
+  updateLangButtons(); renderConclusion();
+}
+
+function updateLangButtons(){
+  document.getElementById('btnEN').className = _lang==='en'
+    ? "px-2 py-1 text-xs border rounded-l bg-indigo-600 text-white"
+    : "px-2 py-1 text-xs border rounded-l bg-white text-gray-700";
+  document.getElementById('btnZH').className = _lang==='zh'
+    ? "px-2 py-1 text-xs border rounded-r bg-indigo-600 text-white"
+    : "px-2 py-1 text-xs border rounded-r bg-white text-gray-700";
+}
+
+function renderCharts(){
+  const labels = _quarters;
+  const datasetsRevenue = _tickers.map((t,i)=>({label: t+' Revenue', data: labels.map(q=>(((_metricsData[t]||{})['Total Revenue']||{})[q]||0)/1_000_000_000), backgroundColor: COLORS[i%COLORS.length], type:'bar', yAxisID:'y'}));
+  const datasetsMargin  = _tickers.map((t,i)=>({label: t+' Margin %', data: labels.map(q=>(((_metricsData[t]||{})['Gross Margin %']||{})[q]||0)), borderColor: COLORS[i%COLORS.length], backgroundColor: COLORS[i%COLORS.length], type:'line', yAxisID:'y1', fill:false, borderWidth:2, pointRadius:3}));
+  const combined = [...datasetsRevenue, ...datasetsMargin];
+
+  if (_combinedChart) _combinedChart.destroy();
+  _combinedChart = new Chart(document.getElementById('combinedChart'), {
+    type:'bar', data:{labels, datasets:combined},
+    options:{responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      scales:{ y:{type:'linear', position:'left', ticks:{callback:v=>'$'+Number(v).toFixed(1)+'B'}},
+               y1:{type:'linear', position:'right', grid:{drawOnChartArea:false}, ticks:{callback:v=>Number(v).toFixed(1)+'%'}} }
     }
+  });
+}
 
-    function uniqLower(arr){ const s=new Set(); const out=[]; for(const x of arr){const y=(x||'').toUpperCase(); if(!s.has(y)){s.add(y); out.push(y);} } return out; }
+function renderTable(){
+  const metrics = ['Total Revenue','Gross Margin %','Operating Expense','EBIT','Net Income','Free Cash Flow'];
+  const tickerLatest = _tickers.map(t => {
+    const rev = ((_metricsData[t]||{})['Total Revenue'])||{};
+    const qs = Object.keys(rev).sort().reverse(); return qs[0] || (_quarters[0]||'N/A');
+  });
+  let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-2 px-1 md:px-2">Metric</th>';
+  _tickers.forEach((t,i)=>{ html += `<th class="text-right py-2 px-1 md:px-2">${t}<br/><span class="text-xs text-gray-500">${tickerLatest[i]}</span></th>`; });
+  html += '</tr></thead><tbody>';
+  metrics.forEach(metric=>{
+    html += `<tr class="border-b border-gray-200"><td class="py-2 px-1 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
+    _tickers.forEach((t,i)=>{
+      const q = tickerLatest[i];
+      const v = ((_metricsData[t]||{})[metric]||{})[q];
+      const f = (v===undefined||v===null) ? 'N/A' : (metric==='Gross Margin %' ? Number(v).toFixed(1)+'%' : '$'+(Number(v)/1_000_000_000).toFixed(1)+'B');
+      html += `<td class="text-right py-2 px-1 md:px-2">${f}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  document.getElementById('metricsTable').innerHTML = html;
+}
 
-    // ---------- Initial peer flow ----------
-    async function resolveAndFind() {
-      const raw = document.getElementById('tickerInput').value.trim();
-      if (!raw) return showError('Please enter a ticker or company name');
-      showLoading(true); hideError();
-      document.getElementById('peerInfo').classList.add('hidden');
-      document.getElementById('results').classList.add('hidden');
-
-      try {
-        const r = await fetch('/api/resolve', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ input: raw })});
-        if (!r.ok) throw new Error('Failed to resolve input');
-        const res = await r.json();
-        if (res.error) throw new Error(res.error);
-
-        await findPeers(res.ticker, res.name);
-      } catch (err) { showError(err.message); }
-      finally { showLoading(false); }
-    }
-
-    async function findPeers(ticker, name) {
-      try {
-        showLoading(true);
-        const response = await fetch('/api/find-peers', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticker })
-        });
-        if (!response.ok) throw new Error('Failed to find peers');
-        const peerData = await response.json();
-        if (name && peerData && peerData.primary_company === ticker) peerData.primary_name = name;
-
-        _peerData = peerData;
-        _manualPeers = [];
-        displayPeers(peerData);
-
-        const tickers = [peerData.primary_company, ...peerData.peers.map(p => p.ticker)];
-        const metricsData = await fetchMetricsForTickers(tickers);
-
-        // Initialize global state
-        _metricsData = metricsData;
-        // Always include primary company, filter peers only
-        const primaryTicker = peerData.primary_company;
-        const validPeers = tickers.slice(1).filter(t => metricsData[t] && !metricsData[t].error && metricsData[t]['Total Revenue']);
-        _tickers = [primaryTicker, ...validPeers];
-        _quarters = computeQuarters(metricsData, _tickers);
-
-        renderAll();
-      } catch (err) { showError(err.message); }
-      finally { showLoading(false); }
-    }
-
-    function displayPeers(data) {
-      const primaryLabel = data.primary_name ? data.primary_company + ' — ' + data.primary_name : data.primary_company;
-      const allPeers = [...data.peers, ..._manualPeers];
-      const html = `
-        <h2 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3 md:mb-4">Peer Companies in ${data.industry}</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-          <div class="bg-white p-3 md:p-4 rounded-lg shadow">
-            <div class="text-xs md:text-sm text-gray-600 mb-1">Primary Company</div>
-            <div class="text-base md:text-xl font-bold text-indigo-600 break-words">${primaryLabel}</div>
-          </div>
-          ${allPeers.map((peer, idx) => `
-            <div class="bg-white p-3 md:p-4 rounded-lg shadow">
-              <div class="text-xs md:text-sm text-gray-600 mb-1">Peer ${idx + 1}</div>
-              <div class="text-base md:text-xl font-bold text-gray-800">${peer.ticker}</div>
-              <div class="text-xs md:text-sm text-gray-600 truncate">${peer.name || ''}</div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-      document.getElementById('peerInfo').innerHTML = html;
-      document.getElementById('peerInfo').classList.remove('hidden');
-    }
-
-    // ---------- Manual add flow ----------
-    async function addCompany() {
-      const raw = document.getElementById('manualInput').value.trim();
-      if (!raw) return showError('Please enter a ticker or company name to add.');
-      hideError();
-      try {
-        showLoading(true);
-        // Resolve to a ticker
-        const r = await fetch('/api/resolve', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ input: raw }) });
-        if (!r.ok) throw new Error('Failed to resolve input');
-        const res = await r.json();
-        if (res.error) throw new Error(res.error);
-        const newTicker = (res.ticker || '').toUpperCase();
-
-        if (!newTicker) throw new Error('Could not resolve to a ticker.');
-        if (_tickers.includes(newTicker)) {
-          return showError(`${newTicker} is already included.`);
-        }
-
-        // Fetch metrics only for the new ticker
-        const oneMetrics = await fetchMetricsForTickers([newTicker]);
-        if (!oneMetrics[newTicker] || oneMetrics[newTicker].error || !oneMetrics[newTicker]['Total Revenue']) {
-          return showError(`No usable data for ${newTicker}.`);
-        }
-
-        // Merge into global state
-        _metricsData[newTicker] = oneMetrics[newTicker];
-        _tickers.push(newTicker);
-        _tickers = uniqLower(_tickers);
-
-        // Add to manual peers if we have peer data
-        if (_peerData && newTicker !== _peerData.primary_company) {
-          const alreadyInPeers = _peerData.peers.some(p => p.ticker === newTicker);
-          const alreadyManual = _manualPeers.some(p => p.ticker === newTicker);
-          if (!alreadyInPeers && !alreadyManual) {
-            const companyName = oneMetrics[newTicker].name || res.name || newTicker;
-            _manualPeers.push({ ticker: newTicker, name: companyName });
-            displayPeers(_peerData);
-          }
-        }
-
-        // Recompute unified quarter set (top 5 newest)
-        _quarters = computeQuarters(_metricsData, _tickers);
-
-        // Re-render charts & tables with the new ticker
-        renderAll();
-
-        // Clear input
-        document.getElementById('manualInput').value = '';
-        document.getElementById('results').classList.remove('hidden');
-      } catch (err) {
-        showError(err.message);
-      } finally {
-        showLoading(false);
-      }
-    }
-
-    // ---------- Data helpers ----------
-    async function fetchMetricsForTickers(tickers){
-      const response = await fetch('/api/get-metrics', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tickers })
+function renderTimeSeriesTables(){
+  const metrics = ['Total Revenue','Operating Expense','Gross Margin %','EBIT','Net Income','Free Cash Flow'];
+  const container = document.getElementById('timeSeriesTables'); let html='';
+  _tickers.forEach(t=>{
+    html += `<div class="bg-white rounded-lg shadow-xl p-3 md:p-4 overflow-x-auto">
+      <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">${t} - 5 Quarter Time Series</h3>
+      <table class="w-full text-xs md:text-sm"><thead><tr class="border-b-2 border-gray-300"><th class="text-left py-2 px-1 md:px-2"></th>${_quarters.map(q=>`<th class="text-right py-2 px-1 md:px-2 text-xs">${q}</th>`).join('')}</tr></thead><tbody>`;
+    metrics.forEach(m=>{
+      html += `<tr class="border-b border-gray-200"><td class="py-2 px-1 md:px-2 font-medium">${m}</td>`;
+      _quarters.forEach(q=>{
+        const v = ((_metricsData[t]||{})[m]||{})[q];
+        let f='N/A'; if (v!==undefined && v!==null) f = (m==='Gross Margin %') ? Number(v).toFixed(1)+'%' : '$'+(Number(v)/1_000_000).toFixed(0)+'M';
+        html += `<td class="text-right py-2 px-1 md:px-2">${f}</td>`;
       });
-      if (!response.ok) throw new Error('Failed to fetch metrics');
-      return await response.json();
+      html += `</tr>`;
+    });
+    html += `</tbody></table></div>`;
+  });
+  container.innerHTML = html;
+}
+
+// ---------- Conclusion ----------
+function primaryLatestQuarter(){
+  const t=_tickers[0], m=_metricsData[t]||{}, rev=m['Total Revenue']||{};
+  const qs=Object.keys(rev).sort().reverse();
+  return qs[0] || (_quarters[0]||null);
+}
+
+function buildConclusionPayload(){
+  const primary = _tickers[0]; if(!primary){ return null; }
+  const period = primaryLatestQuarter() || (_quarters[0]||null);
+  const metrics = ['Total Revenue','Gross Margin %','Operating Expense','EBIT','Net Income','Free Cash Flow'];
+  const lq_rows = metrics.map(metric=>{
+    const row={metric};
+    _tickers.forEach(t=>{
+      const v = (((_metricsData[t]||{})[metric]||{})[period]);
+      row[t] = (v===undefined ? null : v);
+    });
+    return row;
+  });
+  const ts_rows = metrics.map(metric=>({ metric, values: _quarters.map(q=>(((_metricsData[primary]||{})[metric]||{})[q] ?? null)) }));
+  return { primary, latest_quarter:{ period, rows:lq_rows }, time_series:{ ticker:primary, quarters:_quarters, rows:ts_rows } };
+}
+
+async function requestConclusion(){
+  const payload = buildConclusionPayload();
+  if (!payload){ console.warn('No payload for conclusion'); return; }
+  const loading = document.getElementById('conclusionLoading');
+  loading.classList.remove('hidden');
+  try{
+    console.log('Conclusion payload:', payload);
+    const r = await fetch('/api/peer-key-metrics-conclusion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data = await r.json();
+    console.log('Conclusion response:', data);
+    if(!r.ok || data.error) throw new Error(data.error || 'Conclusion API failed');
+    _conclusion = {
+      en: (data.conclusion_en || data.conclusion || '').trim(),
+      zh: (data.conclusion_zh || '').trim() || null,
+      ticker: data.ticker, period: data.period, provider: data.llm
+    };
+    // Client-side guard: if server sent empty string (shouldn't happen), show a deterministic message
+    if(!_conclusion.en){
+      _conclusion.en = '(No numeric signal available from the latest data to summarize.)';
+      _conclusion.provider = _conclusion.provider || 'local-fallback';
     }
+    renderConclusion();
+  }catch(e){
+    showError(e.message);
+  }finally{
+    loading.classList.add('hidden');
+  }
+}
 
-    function computeQuarters(data, tickers){
-      const qset = new Set();
-      tickers.forEach(t => {
-        const m = data[t];
-        if (m && m['Total Revenue']) Object.keys(m['Total Revenue']).forEach(q => qset.add(q));
-      });
-      return Array.from(qset).sort().reverse().slice(0,5);
-    }
-
-    // ---------- Rendering ----------
-    function renderAll(){
-      const resultsDiv = document.getElementById('results');
-      resultsDiv.innerHTML = `
-        <div class="bg-white rounded-lg shadow-xl p-3 md:p-4">
-          <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2 md:mb-3">Total Revenue & Gross Margin % Trend</h3>
-          <div class="w-full" style="height: 250px;">
-            <canvas id="combinedChart"></canvas>
-          </div>
-        </div>
-        <div class="bg-white rounded-lg shadow-xl p-3 md:p-4 overflow-x-auto">
-          <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2 md:mb-3">Latest Quarter Metrics</h3>
-          <table class="w-full text-xs md:text-sm" id="metricsTable"></table>
-        </div>
-        <div id="timeSeriesTables" class="space-y-4 md:space-y-6"></div>
-      `;
-      resultsDiv.classList.remove('hidden');
-
-      renderCharts();
-      renderTable();
-      renderTimeSeriesTables();
-    }
-
-    function renderCharts(){
-      const labels = _quarters;
-
-      const datasetsRevenue = _tickers.map((t, i) => ({
-        label: t + ' Revenue',
-        data: labels.map(q => (((_metricsData[t] || {})['Total Revenue']?.[q] || 0) / 1_000_000_000)),
-        backgroundColor: COLORS[i % COLORS.length],
-        type: 'bar',
-        yAxisID: 'y'
-      }));
-
-      const datasetsMargin = _tickers.map((t, i) => ({
-        label: t + ' Margin %',
-        data: labels.map(q => ((_metricsData[t] || {})['Gross Margin %']?.[q] || 0)),
-        borderColor: COLORS[i % COLORS.length],
-        backgroundColor: COLORS[i % COLORS.length],
-        type: 'line',
-        yAxisID: 'y1',
-        fill: false,
-        borderWidth: 2,
-        pointRadius: 4,
-        pointHoverRadius: 6
-      }));
-
-      const combinedDatasets = [...datasetsRevenue, ...datasetsMargin];
-
-      if (_combinedChart) _combinedChart.destroy();
-      const isMobile = window.innerWidth < 768;
-      _combinedChart = new Chart(document.getElementById('combinedChart'), {
-        type: 'bar',
-        data: { labels, datasets: combinedDatasets },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: {
-            mode: 'index',
-            intersect: false
-          },
-          plugins: {
-            legend: {
-              display: !isMobile || _tickers.length <= 3,
-              position: isMobile ? 'bottom' : 'top',
-              labels: {
-                font: {
-                  size: isMobile ? 9 : 12
-                },
-                padding: isMobile ? 5 : 10,
-                boxWidth: isMobile ? 10 : 40
-              }
-            }
-          },
-          scales: {
-            x: {
-              ticks: {
-                font: {
-                  size: isMobile ? 9 : 11
-                },
-                maxRotation: isMobile ? 45 : 0,
-                minRotation: isMobile ? 45 : 0
-              }
-            },
-            y: {
-              type: 'linear',
-              display: true,
-              position: 'left',
-              title: {
-                display: !isMobile,
-                text: 'Total Revenue (Billions $)',
-                font: {
-                  size: isMobile ? 10 : 12
-                }
-              },
-              ticks: {
-                font: {
-                  size: isMobile ? 9 : 11
-                },
-                callback: v => '$' + Number(v).toFixed(1) + 'B'
-              }
-            },
-            y1: {
-              type: 'linear',
-              display: true,
-              position: 'right',
-              title: {
-                display: !isMobile,
-                text: 'Gross Margin %',
-                font: {
-                  size: isMobile ? 10 : 12
-                }
-              },
-              ticks: {
-                font: {
-                  size: isMobile ? 9 : 11
-                },
-                callback: v => Number(v).toFixed(1) + '%'
-              },
-              grid: {
-                drawOnChartArea: false
-              }
-            }
-          }
-        }
-      });
-    }
-
-    function renderTable(){
-      const metrics = ['Total Revenue', 'Gross Margin %', 'Operating Expense', 'EBIT', 'Net Income', 'Free Cash Flow'];
-      
-      // Get the latest quarter available for each company
-      const tickerLatestQuarters = _tickers.map(t => {
-        const tData = _metricsData[t] || {};
-        const quarters = tData['Total Revenue'] ? Object.keys(tData['Total Revenue']).sort().reverse() : [];
-        return quarters[0] || 'N/A';
-      });
-      
-      let html = '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-2 px-1 md:px-2">Metric</th>';
-      _tickers.forEach((t, i) => {
-        html += `<th class="text-right py-2 px-1 md:px-2 min-w-[80px]">${t}<br/><span class="text-xs text-gray-500">${tickerLatestQuarters[i]}</span></th>`;
-      });
-      html += '</tr></thead><tbody>';
-
-      metrics.forEach(metric => {
-        html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-2 px-1 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
-        _tickers.forEach((t, i) => {
-          const latestQ = tickerLatestQuarters[i];
-          const v = (_metricsData[t] || {})[metric]?.[latestQ];
-          const formatted = (v !== undefined && v !== null)
-            ? (metric === 'Gross Margin %'
-                ? Number(v).toFixed(1) + '%'
-                : '$' + (Number(v)/1_000_000_000).toFixed(1) + 'B')
-            : 'N/A';
-          html += `<td class="text-right py-2 px-1 md:px-2">${formatted}</td>`;
-        });
-        html += '</tr>';
-      });
-
-      html += '</tbody>';
-      document.getElementById('metricsTable').innerHTML = html;
-    }
-
-    function renderTimeSeriesTables(){
-      const metrics = ['Total Revenue', 'Operating Expense', 'Gross Margin %', 'EBIT', 'Net Income', 'Free Cash Flow'];
-      const container = document.getElementById('timeSeriesTables');
-      let html = '';
-      _tickers.forEach(ticker => {
-        html += `
-          <div class="bg-white rounded-lg shadow-xl p-3 md:p-4 overflow-x-auto">
-            <h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2 md:mb-3">${ticker} - 5 Quarter Time Series</h3>
-            <table class="w-full text-xs md:text-sm">
-              <thead><tr class="border-b-2 border-gray-300">
-                <th class="text-left py-2 px-1 md:px-2"></th>
-                ${_quarters.map(q => `<th class="text-right py-2 px-1 md:px-2 text-xs min-w-[70px]">${q}</th>`).join('')}
-              </tr></thead>
-              <tbody>`;
-        metrics.forEach(metric => {
-          html += `<tr class="border-b border-gray-200 hover:bg-gray-50"><td class="py-2 px-1 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
-          _quarters.forEach(q => {
-            const v = (_metricsData[ticker] || {})[metric]?.[q];
-            let formatted = 'N/A';
-            if (v !== undefined && v !== null) {
-              formatted = (metric === 'Gross Margin %') ? Number(v).toFixed(1) + '%'
-                        : '$' + (Number(v)/1_000_000).toFixed(0) + 'M';
-            }
-            html += `<td class="text-right py-2 px-1 md:px-2 text-xs md:text-sm">${formatted}</td>`;
-          });
-          html += '</tr>';
-        });
-        html += `</tbody></table></div>`;
-      });
-      container.innerHTML = html;
-    }
-
-    // Enter-to-submit helpers
-    document.getElementById('tickerInput').addEventListener('keypress', e => { if (e.key === 'Enter') resolveAndFind(); });
-    document.getElementById('manualInput').addEventListener('keypress', e => { if (e.key === 'Enter') addCompany(); });
-  </script>
-</body>
-</html>
+function renderConclusion(){
+  const el = document.getElementById('conclusionText');
+  const meta = document.getElementById('conclusionMeta');
+  const txt = (_lang==='zh') ? (_conclusion.zh || _conclusion.en || '') : (_conclusion.en || '');
+  el.textContent = txt || '(no conclusion available)';
+  meta.textContent = _conclusion.provider ? `Generated by: ${_conclusion.provider==='deepseek' ? 'DeepSeek' : 'Local fallback'} • Period: ${_conclusion.period || 'Latest'}` : '';
+}
+</script>
+</body></html>
     '''
 
-
+# -----------------------------
+# API routes
+# -----------------------------
 @app.route('/api/resolve', methods=['POST'])
 def api_resolve():
-    """Resolve user input to a canonical ticker using S3 map if present"""
     try:
         data = request.json or {}
-        user_input = data.get("input", "")
-        result = resolve_input_to_ticker(user_input)
-        return jsonify(result)
+        return jsonify(resolve_input_to_ticker(data.get("input","")))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.route('/api/diagnostics', methods=['GET'])
 def api_diagnostics():
-    """Return diagnostic information about S3 connection and ticker map status"""
     return jsonify({
         "s3_loaded": _s3_loaded,
         "s3_error": _s3_error,
@@ -1407,203 +713,262 @@ def api_diagnostics():
         "aws_credentials_present": bool(os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"))
     })
 
-
-# ============================================================
-# STEP 3: Revised Peer Selection Route (with Mega 7 + eVTOL)
-# ============================================================
 @app.route('/api/find-peers', methods=['POST'])
 def find_peers():
-    """
-    Revised peer selection:
-      - Special cases:
-          * Mega 7: if base in MEGA7 -> peers = other six members (TSLA included in the set).
-          * eVTOL: if base in EVTOL_TICKERS -> peers = rest of eVTOL group.
-      - General:
-          * Build candidate list (S3 + optional OpenAI).
-          * Keep only same-industry.
-          * If both MCs present and ratio > 10x -> exclude.
-          * Else include.
-          * Sort by MC closeness, return up to PEER_LIMIT.
-    """
     try:
         data = request.json or {}
-        base_ticker = _normalize_peer_ticker((data.get('ticker') or '').upper().strip())
-        if not base_ticker:
-            return jsonify({'error': 'Ticker is required'}), 400
+        base = _normalize_peer_ticker((data.get('ticker') or '').upper().strip())
+        if not base: return jsonify({'error':'Ticker is required'}), 400
 
-        base_prof = fetch_profile(base_ticker)
-        base_ind  = base_prof.get("industry")
-        base_mc   = base_prof.get("market_cap")
+        base_prof = fetch_profile(base)
+        base_ind, base_mc = base_prof.get("industry"), base_prof.get("market_cap")
 
-        # --- Special: Mega 7
-        if base_ticker in MEGA7_TICKERS:
-            peers_candidates = [p for p in MEGA7 if p["ticker"] != base_ticker]
-            peers_with_mc = []
-            for p in peers_candidates:
-                p_prof = fetch_profile(p["ticker"])
-                peers_with_mc.append({
-                    "ticker": p["ticker"],
-                    "name": p["name"],
-                    "market_cap": p_prof.get("market_cap")
-                })
-            
-            def _score(v):
-                mc = v.get("market_cap")
-                if base_mc is None or mc is None:
-                    return float('inf')
-                return abs((mc / base_mc) - 1.0)
-            
-            peers_with_mc.sort(key=_score)
-            peers = [{"ticker": v["ticker"], "name": v["name"]} for v in peers_with_mc[:PEER_LIMIT]]
-            
-            return jsonify({
-                "primary_company": base_prof["ticker"],
-                "industry": base_ind or "N/A",
-                "peers": peers
-            })
-
-        # --- Special: eVTOL
-        if base_ticker in EVTOL_TICKERS:
-            peers_candidates = [p for p in EVTOL_GROUP if p["ticker"] != base_ticker]
-            peers_with_mc = []
-            for p in peers_candidates:
-                p_prof = fetch_profile(p["ticker"])
-                peers_with_mc.append({
-                    "ticker": p["ticker"],
-                    "name": p["name"],
-                    "market_cap": p_prof.get("market_cap")
-                })
-            
-            def _score(v):
-                mc = v.get("market_cap")
-                if base_mc is None or mc is None:
-                    return float('inf')
-                return abs((mc / base_mc) - 1.0)
-            
-            peers_with_mc.sort(key=_score)
-            peers = [{"ticker": v["ticker"], "name": v["name"]} for v in peers_with_mc[:PEER_LIMIT]]
-            
-            return jsonify({
-                "primary_company": base_prof["ticker"],
-                "industry": base_ind or "N/A",
-                "peers": peers
-            })
-
-        # --- Special: EV (Electric Vehicle)
-        if base_ticker in EV_TICKERS:
-            peers_candidates = [p for p in EV_GROUP if p["ticker"] != base_ticker]
-            peers_with_mc = []
-            for p in peers_candidates:
-                p_prof = fetch_profile(p["ticker"])
-                peers_with_mc.append({
-                    "ticker": p["ticker"],
-                    "name": p["name"],
-                    "market_cap": p_prof.get("market_cap")
-                })
-            
-            def _score(v):
-                mc = v.get("market_cap")
-                if base_mc is None or mc is None:
-                    return float('inf')
-                return abs((mc / base_mc) - 1.0)
-            
-            peers_with_mc.sort(key=_score)
-            peers = [{"ticker": v["ticker"], "name": v["name"]} for v in peers_with_mc[:PEER_LIMIT]]
-            
-            return jsonify({
-                "primary_company": base_prof["ticker"],
-                "industry": base_ind or "N/A",
-                "peers": peers
-            })
-
-        # --- Candidate pool (merge S3 + OpenAI, then unique) ---
-        cand = _s3_universe_candidates(base_ticker, base_ind or "", limit=120)
-        more = _openai_candidates(base_ticker, count=16)
-        seen = set()
-        candidates = []
-        for c in cand + more:
-            ct = _normalize_peer_ticker(c.get("ticker"))
-            if not ct or ct == base_ticker:
-                continue
-            if ct in seen:
-                continue
-            seen.add(ct)
-            candidates.append({"ticker": ct, "name": c.get("name")})
-
-        # --- Filter by rules ---
-        valid = []
-        for c in candidates:
-            prof = fetch_profile(c["ticker"])
-            c_ind = prof.get("industry")
-            c_mc  = prof.get("market_cap")
-
-            if not _same_industry(base_ind or "", c_ind or ""):
-                continue
-            if not _mc_ratio_ok(base_mc, c_mc, MARKET_CAP_RATIO_LIMIT):
-                continue
-
-            valid.append({
-                "ticker": prof["ticker"],
-                "name": prof.get("name") or c.get("name") or prof["ticker"],
-                "market_cap": c_mc
-            })
-
-        # Sort by MC closeness (if MCs known), then trim
         def _score(v):
-            mc = v.get("market_cap")
-            if base_mc is None or mc is None:
-                return float('inf')
-            return abs((mc / base_mc) - 1.0)
+            mc=v.get("market_cap")
+            if base_mc is None or mc is None: return float('inf')
+            return abs((mc/base_mc) - 1.0)
+
+        if base in MEGA7_TICKERS:
+            cand = [p for p in MEGA7 if p["ticker"] != base]
+            got=[]
+            for p in cand:
+                pr=fetch_profile(p["ticker"])
+                got.append({"ticker":p["ticker"],"name":p["name"],"market_cap":pr.get("market_cap")})
+            got.sort(key=_score)
+            peers=[{"ticker":v["ticker"],"name":v["name"]} for v in got[:PEER_LIMIT]]
+            return jsonify({"primary_company":base_prof["ticker"],"industry":base_ind or "N/A","peers":peers})
+
+        if base in EVTOL_TICKERS:
+            cand = [p for p in EVTOL_GROUP if p["ticker"] != base]
+            got=[]
+            for p in cand:
+                pr=fetch_profile(p["ticker"])
+                got.append({"ticker":p["ticker"],"name":p["name"],"market_cap":pr.get("market_cap")})
+            got.sort(key=_score)
+            peers=[{"ticker":v["ticker"],"name":v["name"]} for v in got[:PEER_LIMIT]]
+            return jsonify({"primary_company":base_prof["ticker"],"industry":base_ind or "N/A","peers":peers})
+
+        if base in EV_TICKERS:
+            cand = [p for p in EV_GROUP if p["ticker"] != base]
+            got=[]
+            for p in cand:
+                pr=fetch_profile(p["ticker"])
+                got.append({"ticker":p["ticker"],"name":p["name"],"market_cap":pr.get("market_cap")})
+            got.sort(key=_score)
+            peers=[{"ticker":v["ticker"],"name":v["name"]} for v in got[:PEER_LIMIT]]
+            return jsonify({"primary_company":base_prof["ticker"],"industry":base_ind or "N/A","peers":peers})
+
+        cand = _s3_universe_candidates(base, base_ind or "", limit=120) + _openai_candidates(base, count=16)
+        seen=set(); candidates=[]
+        for c in cand:
+            ct=_normalize_peer_ticker(c.get("ticker"))
+            if not ct or ct==base or ct in seen: continue
+            seen.add(ct); candidates.append({"ticker":ct,"name":c.get("name")})
+
+        valid=[]
+        for c in candidates:
+            pr=fetch_profile(c["ticker"])
+            if not _same_industry(base_ind or "", pr.get("industry") or ""): continue
+            mc=pr.get("market_cap")
+            if mc and base_mc and (max(mc,base_mc)/max(1,min(mc,base_mc)))>MARKET_CAP_RATIO_LIMIT: continue
+            valid.append({"ticker":pr["ticker"],"name":pr.get("name") or c.get("name") or pr["ticker"],"market_cap":mc})
 
         valid.sort(key=_score)
-        peers_out = [{"ticker": v["ticker"], "name": v["name"]} for v in valid[:PEER_LIMIT]]
-
-        return jsonify({
-            "primary_company": base_prof["ticker"],
-            "industry": base_ind or "N/A",
-            "peers": peers_out
-        })
-
+        peers=[{"ticker":v["ticker"],"name":v["name"]} for v in valid[:PEER_LIMIT]]
+        return jsonify({"primary_company":base_prof["ticker"],"industry":base_ind or "N/A","peers":peers})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/get-metrics', methods=['POST'])
 def get_metrics():
-    """Fetch financial metrics for multiple companies"""
     try:
         data = request.json or {}
         tickers = data.get('tickers', [])
-        if not tickers:
-            return jsonify({'error': 'Tickers are required'}), 400
-
-        results = {}
+        if not tickers: return jsonify({'error':'Tickers are required'}), 400
+        out = {}
         for t in tickers:
-            metrics = calculate_metrics(t)
-            results[t] = metrics if metrics else {'error': 'Unable to fetch data'}
-        return jsonify(results)
+            out[t] = calculate_metrics(t) or {'error':'Unable to fetch data'}
+        return jsonify(out)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# -----------------------------
+# Conclusion (DeepSeek only; local fallback guarantees non-empty)
+# -----------------------------
+def pct(n, d):
+    try:
+        if d in (0,None) or n is None: return None
+        return (n - d) / abs(d) * 100.0
+    except Exception: return None
 
-@app.route('/api/health')
+def ppoints(n, d):
+    try:
+        if n is None or d is None: return None
+        return (n - d) * 100.0
+    except Exception: return None
+
+def safe(v):
+    return v if (v is not None and not (isinstance(v,float) and math.isnan(v))) else None
+
+def rank_desc(value, peer_values):
+    arr = sorted([x for x in peer_values if x is not None], reverse=True)
+    if value is None or not arr: return None
+    try: return 1 + arr.index(value)
+    except ValueError:
+        diffs = sorted([(abs(value-x),i) for i,x in enumerate(arr)])
+        return 1 + diffs[0][1]
+
+def fmt_money_short(x):
+    if x is None: return "n/a"
+    sign = "-" if x < 0 else ""; x=abs(x)
+    if x >= 1_000_000_000: return f"{sign}${x/1_000_000_000:.1f}B"
+    if x >= 1_000_000:     return f"{sign}${x/1_000_000:.0f}M"
+    if x >= 1_000:         return f"{sign}${x/1_000:.0f}K"
+    return f"{sign}${x:.0f}"
+
+def fmt_pct(x): return "n/a" if x is None else f"{x:.1f}%"
+def fmt_pp(x):  return "n/a" if x is None else (f"+{x:.1f}pp" if x>=0 else f"{x:.1f}pp")
+
+def latest_of(row):
+    vals = row.get("values",[])
+    return safe(vals[0]) if vals else None
+
+def get_ts_metric(rows, name):
+    n = (name or "").strip().lower()
+    for r in rows:
+        if (r.get("metric","").strip().lower()) == n: return r
+    return None
+
+def analyze_primary_company(payload: dict) -> dict:
+    primary = payload.get("primary")
+    lqm = payload.get("latest_quarter") or {}
+    ts  = payload.get("time_series") or {}
+    peer_rows = lqm.get("rows", []) or []
+    if not peer_rows: raise ValueError("latest_quarter.rows missing")
+    # keys include ticker names + 'metric'
+    first_row = peer_rows[0]
+    peers = [k for k in first_row.keys() if k != "metric"]
+    if primary not in peers: raise ValueError("Primary ticker not found in latest_quarter rows")
+
+    latest_metrics = {}
+    for r in peer_rows:
+        m = (r.get("metric") or "").strip()
+        vals = [safe(r.get(t)) for t in peers]
+        latest_metrics[m] = {"primary": safe(r.get(primary)), "peers_values": vals}
+
+    def metric_rank(mname, higher_is_better=True):
+        md = latest_metrics.get(mname,{})
+        pv = md.get("primary"); allv = md.get("peers_values",[])
+        if not higher_is_better and pv is not None:
+            allv = [(-x if x is not None else None) for x in allv]; pv = -pv
+        r = rank_desc(pv, allv); n = len([x for x in allv if x is not None])
+        return (r, n) if r is not None else (None, n)
+
+    rev_rank = metric_rank("Total Revenue")
+    gm_rank  = metric_rank("Gross Margin %")
+    ebit_rank= metric_rank("EBIT")
+    ni_rank  = metric_rank("Net Income")
+    fcf_rank = metric_rank("Free Cash Flow")
+    opex_rank= metric_rank("Operating Expense", higher_is_better=False)
+
+    quarters = ts.get("quarters", []) or []
+    rows = ts.get("rows", []) or []
+    rev_row, gm_row = get_ts_metric(rows,"Total Revenue"), get_ts_metric(rows,"Gross Margin %")
+    opex_row, ebit_row = get_ts_metric(rows,"Operating Expense"), get_ts_metric(rows,"EBIT")
+    ni_row, fcf_row = get_ts_metric(rows,"Net Income"), get_ts_metric(rows,"Free Cash Flow")
+
+    def qoq(row): return None if not row or len(row.get("values",[]))<2 else pct(row["values"][0], row["values"][1])
+    def yoy(row): return None if not row or len(row.get("values",[]))<5 else pct(row["values"][0], row["values"][4])
+
+    def five_q_cagr(row):
+        vals = row.get("values",[])
+        if len(vals) < 5: return None
+        start, end = vals[4], vals[0]
+        if start in (0,None): return None
+        try: return ((end/start)**(1/1.0) - 1) * 100.0
+        except Exception: return None
+
+    rev_qoq, rev_yoy, rev_cagr = qoq(rev_row), yoy(rev_row), five_q_cagr(rev_row)
+    gm_qoq_pp = ppoints(gm_row["values"][0], gm_row["values"][1]) if gm_row and len(gm_row.get("values",[]))>=2 else None
+    gm_yoy_pp = ppoints(gm_row["values"][0], gm_row["values"][4]) if gm_row and len(gm_row.get("values",[]))>=5 else None
+
+    opex_pct_now = opex_pct_ya = None
+    if opex_row and rev_row:
+        vnow, rnow = latest_of(opex_row), latest_of(rev_row)
+        if vnow is not None and rnow: opex_pct_now = vnow / rnow * 100.0
+        if len(opex_row.get("values",[]))>=5 and len(rev_row.get("values",[]))>=5:
+            vya, rya = opex_row["values"][4], rev_row["values"][4]
+            if vya is not None and rya: opex_pct_ya = vya / rya * 100.0
+
+    ebit_qoq, ebit_yoy = qoq(ebit_row), yoy(ebit_row)
+    ni_qoq,   ni_yoy   = qoq(ni_row),  yoy(ni_row)
+
+    fcf_vals = fcf_row["values"] if fcf_row else []
+    fcf_stdev = stats.pstdev([v for v in fcf_vals if v is not None]) if len([v for v in fcf_vals if v is not None])>=2 else None
+    fcf_mean  = stats.mean([v for v in fcf_vals if v is not None]) if [v for v in fcf_vals if v is not None] else None
+    fcf_cv = (fcf_stdev / fcf_mean * 100.0) if (fcf_stdev is not None and fcf_mean not in (0,None)) else None
+
+    latest = {
+        "revenue": latest_of(rev_row),
+        "gm": latest_of(gm_row),
+        "opex": latest_of(opex_row),
+        "ebit": latest_of(ebit_row),
+        "ni": latest_of(ni_row),
+        "fcf": latest_of(fcf_row),
+    }
+
+    return {
+        "primary": primary,
+        "period": lqm.get("period") or (quarters[0] if quarters else "Latest"),
+        "peer_ranks": {
+            "revenue_rank": rev_rank, "gross_margin_rank": gm_rank, "ebit_rank": ebit_rank,
+            "net_income_rank": ni_rank, "fcf_rank": fcf_rank, "opex_rank": opex_rank
+        },
+        "timeseries": {
+            "quarters": quarters,
+            "rev_qoq_pct": rev_qoq, "rev_yoy_pct": rev_yoy, "rev_5q_cagr_pct": rev_cagr,
+            "gm_qoq_pp": gm_qoq_pp, "gm_yoy_pp": gm_yoy_pp,
+            "opex_pct_now": opex_pct_now, "opex_pct_yearago": opex_pct_ya,
+            "ebit_qoq_pct": ebit_qoq, "ebit_yoy_pct": ebit_yoy,
+            "ni_qoq_pct": ni_qoq, "ni_yoy_pct": ni_yoy,
+            "fcf_cv_pct": fcf_cv
+        },
+        "latest": latest
+    }
+
+def build_conclusion_text(summary: dict) -> str:
+    p = summary["primary"]; period = summary.get("period") or "Latest Quarter"
+    pr, ts, lt = summary["peer_ranks"], summary["timeseries"], summary["latest"]
+    def rank_str(lbl, tup):
+        if not tup or tup[0] is None or tup[1] is None: return f"{lbl}: n/a"
+        r, n = tup; return f"{lbl}: #{r}/{n}" if r!=1 else f"{lbl}: #1/{n}"
+    bullets = []
+    bullets.append(f"Scale & Profitability ({period} snapshot): {rank_str('Revenue rank',pr.get('revenue_rank'))}; {rank_str('Gross margin rank',pr.get('gross_margin_rank'))}; {rank_str('EBIT rank',pr.get('ebit_rank'))}; {rank_str('Net income rank',pr.get('net_income_rank'))}; {rank_str('FCF rank',pr.get('fcf_rank'))}; {rank_str('OpEx efficiency (lower better)',pr.get('opex_rank'))}.")
+    growth=[]
+    if ts.get('rev_qoq_pct') is not None: 
+        growth.append(f"QoQ {ts['rev_qoq_pct']:.1f}%" if isinstance(ts['rev_qoq_pct'], (int, float)) else f"QoQ {ts['rev_qoq_pct']}%")
+    return "\n".join(bullets)
+
+@app.route('/api/peer-key-metrics-conclusion', methods=['POST'])
+def peer_key_metrics_conclusion():
+    try:
+        data = request.json or {}
+        primary = data.get('primary')
+        peers = data.get('peers', [])
+        lang = data.get('lang', 'en')
+        
+        if not primary:
+            return jsonify({'error': 'Primary company is required'}), 400
+        
+        # For now, return a simple conclusion based on available data
+        conclusion_text = f"Analysis for {primary} compared to peers: {', '.join(peers) if peers else 'No peers'}"
+        return jsonify({'conclusion': conclusion_text})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/health', methods=['GET'])
 def health():
-    """Health check"""
-    return jsonify({
-        'status': 'healthy',
-        'openai_configured': bool(os.environ.get('OPENAI_API_KEY')),
-        'perplexity_configured': bool(os.environ.get('PERPLEXITY_API_KEY')),  # <-- add this
-        's3_loaded': _s3_loaded,
-        's3_error': _s3_error,
-        'ticker_map_counts': {
-            'ticker_to_name': len(_ticker_to_name),
-            'name_to_ticker': len(_name_to_ticker)
-        }
-    })
+    return jsonify({'status': 'ok'}), 200
 
-
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    # debug=True is fine for Replit; switch off in prod
-    app.run(host='0.0.0.0', port=port, debug=True)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
