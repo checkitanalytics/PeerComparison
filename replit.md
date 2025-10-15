@@ -52,11 +52,16 @@ Preferred communication style: Simple, everyday language.
 - **Data Retrieved**: Quarterly income statements and cash flow statements
 
 **Financial Metrics Calculation**
-- Gross Margin % (calculated from Gross Profit and Total Revenue)
-- Operating Expense (sum of SG&A and R&D)
-- EBIT (from Operating Income)
-- Free Cash Flow (Operating Cash Flow + Capital Expenditure)
-- Handles missing data gracefully with fallback calculations
+- **Total Revenue**: Primary revenue fields with fallbacks
+- **Gross Margin %**: Calculated from Gross Profit and Total Revenue (when available)
+- **Operating Expense**: Direct fields or calculated from components (SG&A + R&D, or SG&A + Selling & Marketing, or SG&A alone)
+- **EBIT**: Direct fields or calculated (Gross Profit - OpEx, or Revenue - COGS - OpEx, or Pretax Income as proxy)
+- **Net Income**: Primary income statement fields
+- **Free Cash Flow**: Operating Cash Flow + Capital Expenditure
+- Handles different company types:
+  - Standard tech/manufacturing companies: All 6 metrics available
+  - Fintech/financial services: 5 metrics (Gross Margin % N/A due to no COGS)
+- Robust fallback calculations for missing direct fields
 
 ### API Endpoints
 
@@ -167,12 +172,22 @@ Preferred communication style: Simple, everyday language.
 - Solution: Replaced `getattr(s, "quarterly_financials", None) or getattr(s, "financials", None)` with explicit None checks
 - Impact: Yahoo Finance data fetching now works correctly for all tickers
 
+**Enhanced Metrics Extraction for All Company Types:**
+- Improved Yahoo Finance data extraction with multiple field name variations
+- Added calculation fallbacks for Operating Expense (from SG&A, R&D, Selling & Marketing components)
+- Added calculation fallbacks for EBIT (from Gross Profit, Revenue, COGS, or Pretax Income)
+- Now supports different company structures:
+  - Standard tech/manufacturing (AAPL, NVDA, TSLA): All 6 metrics
+  - Fintech/financial services (UPST): 5 metrics (Gross Margin % appropriately N/A)
+- Gracefully handles missing fields with intelligent fallback calculations
+
 **AI-Powered Primary Company Conclusion:**
 - Implemented comprehensive AI analysis using OpenAI GPT-4
 - Analyzes 5-quarter time series trends (revenue growth, margin changes, profitability patterns)
 - Compares primary company with peers in latest quarter
 - Identifies notable strengths, concerns, and competitive positioning
 - Provides 3-4 sentence actionable insights
+- Handles missing metrics gracefully in analysis
 - Includes fallback to basic summary if OpenAI API fails
 
 **Previous Updates:**

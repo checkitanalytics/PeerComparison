@@ -237,25 +237,55 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
             if fin_q is None or fin_q.empty or cf_q is None or cf_q.empty:
                 continue
 
-            total_rev   = _pick(fin_q, ["Total Revenue","Revenue"])
-            cost_rev    = _pick(fin_q, ["Cost Of Revenue","Cost of Revenue"])
+            total_rev   = _pick(fin_q, ["Total Revenue","Revenue","Operating Revenue"])
+            cost_rev    = _pick(fin_q, ["Cost Of Revenue","Cost of Revenue","Reconciled Cost Of Revenue"])
             gross_profit= _pick(fin_q, ["Gross Profit"])
-            opex        = _pick(fin_q, ["Operating Expense","Operating Expenses","Total Operating Expenses"])
-            ebit        = _pick(fin_q, ["EBIT","Operating Income"])
-            net_income  = _pick(fin_q, ["Net Income","Net Income Common Stockholders"])
+            opex        = _pick(fin_q, ["Operating Expense","Operating Expenses","Total Operating Expenses","Total Expenses"])
+            ebit        = _pick(fin_q, ["EBIT","Operating Income","Total Operating Income As Reported"])
+            net_income  = _pick(fin_q, ["Net Income","Net Income Common Stockholders","Net Income From Continuing Operation Net Minority Interest"])
 
             ocf   = _pick(cf_q, ["Operating Cash Flow","Total Cash From Operating Activities"])
             capex = _pick(cf_q, ["Capital Expenditure","Capital Expenditures"])
 
+            # Calculate gross profit if not directly available
             if gross_profit is None and total_rev is not None and cost_rev is not None:
                 gross_profit = (total_rev - cost_rev)
+            
+            # Calculate operating expense from components
             if opex is None:
-                sga = _pick(fin_q, ["Selling General And Administration","SG&A Expense"])
+                sga = _pick(fin_q, ["Selling General And Administration","SG&A Expense","General And Administrative Expense"])
                 rnd = _pick(fin_q, ["Research And Development","Research & Development"])
-                if sga is not None and rnd is not None: opex = (sga + rnd)
+                selling = _pick(fin_q, ["Selling And Marketing Expense"])
+                
+                # Try different combinations
+                if sga is not None and rnd is not None:
+                    opex = (sga + rnd)
+                elif sga is not None and selling is not None:
+                    opex = (sga + selling)  # For companies that separate selling from SG&A
+                elif sga is not None:
+                    opex = sga  # Use SG&A alone if that's all we have
+            
+            # Calculate EBIT from available fields
             if ebit is None:
-                op_inc = _pick(fin_q, ["Operating Income"])
-                if op_inc is not None: ebit = op_inc
+                # Try: Gross Profit - Operating Expense
+                if gross_profit is not None and opex is not None:
+                    try:
+                        ebit = (gross_profit - opex)
+                    except Exception:
+                        pass
+                
+                # Try: Revenue - Cost of Revenue - Operating Expense
+                if ebit is None and total_rev is not None and cost_rev is not None and opex is not None:
+                    try:
+                        ebit = (total_rev - cost_rev - opex)
+                    except Exception:
+                        pass
+                
+                # Try using Pretax Income as proxy (not ideal but better than nothing)
+                if ebit is None:
+                    pretax = _pick(fin_q, ["Pretax Income"])
+                    if pretax is not None:
+                        ebit = pretax  # Close approximation
 
             fcf = None
             if ocf is not None and capex is not None:
