@@ -224,8 +224,13 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
         try:
             if attempt: time.sleep(1.2 * attempt)
             s = yf.Ticker(t); _ensure_yf_session_headers(s); time.sleep(0.2)
-            fin_q = getattr(s, "quarterly_financials", None) or getattr(s, "financials", None)
-            cf_q  = getattr(s, "quarterly_cashflow", None) or getattr(s, "cashflow", None)
+            fin_q = getattr(s, "quarterly_financials", None)
+            if fin_q is None:
+                fin_q = getattr(s, "financials", None)
+            cf_q = getattr(s, "quarterly_cashflow", None)
+            if cf_q is None:
+                cf_q = getattr(s, "cashflow", None)
+            
             if fin_q is None or fin_q.empty or cf_q is None or cf_q.empty:
                 continue
             fin_q, cf_q = _ensure_quarterly(fin_q), _ensure_quarterly(cf_q)
@@ -254,7 +259,7 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
 
             fcf = None
             if ocf is not None and capex is not None:
-                try: fcf = (ocf + capex)   # capex negative
+                try: fcf = (ocf + capex)
                 except Exception: pass
 
             out = {}
@@ -281,7 +286,8 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
             if gm_pct is not None: _fill("Gross Margin %", gm_pct, is_pct=True)
             if fcf is not None:    _fill("Free Cash Flow", fcf, is_pct=False)
 
-            if out.get("Total Revenue"): return out
+            if out.get("Total Revenue"):
+                return out
         except Exception:
             continue
     return None
@@ -966,9 +972,9 @@ def peer_key_metrics_conclusion():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/health', methods=['GET'])
+@app.route('/api/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok'}), 200
+    return jsonify({'status': 'ok', 'openai_configured': bool(os.getenv('OPENAI_API_KEY'))}), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

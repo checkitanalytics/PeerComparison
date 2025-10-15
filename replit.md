@@ -155,3 +155,7 @@ Preferred communication style: Simple, everyday language.
 - Fixed missing data handling - companies with no data are filtered out
 - Changed table headers to show actual quarter/year instead of "Latest Quarter"
 - Added time series tables showing 5 quarters of historical data per company
+- **Critical Bug Fix**: Fixed pandas DataFrame boolean evaluation error in calculate_metrics function
+  - Issue: Using `or` operator with DataFrames caused "The truth value of a DataFrame is ambiguous" error
+  - Solution: Replaced `getattr(s, "quarterly_financials", None) or getattr(s, "financials", None)` with explicit None checks
+  - Impact: Yahoo Finance data fetching now works correctly for all tickers
