@@ -330,6 +330,58 @@ def _build_universe(max_size: int = 1800):
     global _UNIVERSE, _UNIVERSE_BUILT
     if _UNIVERSE_BUILT and _UNIVERSE:
         return
+    
+    # Fallback: Comprehensive hardcoded universe of major US companies across all sectors
+    fallback_tickers = [
+        # Mega Cap Tech
+        "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
+        # Tech & Software
+        "ORCL", "CRM", "ADBE", "INTC", "AMD", "QCOM", "AVGO", "CSCO", "IBM", "NOW", "SNOW", "PLTR", "SHOP",
+        # Consumer & Retail
+        "WMT", "COST", "HD", "LOW", "TGT", "DG", "DLTR", "BBY", "GPS", "M", "KSS",
+        # E-commerce & Digital
+        "EBAY", "ETSY", "W", "CHWY",
+        # Auto & EV
+        "F", "GM", "RIVN", "LCID", "NIO", "XPEV", "LI",
+        # Finance & Banks
+        "JPM", "BAC", "WFC", "C", "GS", "MS", "BLK", "SCHW", "USB", "PNC", "TFC", "COF",
+        # Fintech
+        "V", "MA", "PYPL", "SQ", "COIN", "AFRM", "SOFI", "UPST",
+        # Healthcare & Pharma
+        "UNH", "JNJ", "PFE", "ABBV", "MRK", "TMO", "ABT", "DHR", "LLY", "BMY", "AMGN", "GILD", "CVS", "CI",
+        # Biotech
+        "MRNA", "BNTX", "REGN", "VRTX", "BIIB",
+        # Energy
+        "XOM", "CVX", "COP", "SLB", "EOG", "OXY", "MPC", "PSX", "VLO",
+        # Industrials
+        "BA", "CAT", "GE", "HON", "UPS", "LMT", "RTX", "DE", "MMM", "EMR",
+        # Airlines
+        "DAL", "UAL", "AAL", "LUV", "ALK", "JBLU",
+        # Consumer Goods
+        "PG", "KO", "PEP", "NKE", "SBUX", "MCD", "YUM", "CMG", "DPZ",
+        # Telecom
+        "T", "VZ", "TMUS",
+        # Media & Entertainment
+        "DIS", "NFLX", "CMCSA", "WBD", "PARA", "SPOT", "ROKU",
+        # Semiconductors
+        "TSM", "ASML", "MU", "LRCX", "AMAT", "KLAC", "MCHP", "ADI", "TXN", "NXPI",
+        # Cloud & Cybersecurity
+        "NET", "DDOG", "ZS", "OKTA", "CRWD", "S", "PANW", "FTNT",
+        # Real Estate
+        "AMT", "PLD", "CCI", "EQIX", "PSA", "DLR", "O", "VICI", "SPG", "AVB",
+        # Utilities
+        "NEE", "DUK", "SO", "D", "AEP", "EXC", "SRE", "PEG",
+        # Materials & Chemicals
+        "LIN", "APD", "ECL", "SHW", "DD", "DOW", "PPG", "NUE", "FCX",
+        # eVTOL
+        "JOBY", "EH", "ACHR", "BLDE",
+        # Other Notable Companies
+        "UBER", "LYFT", "ABNB", "DASH", "ZM", "DOCU", "TWLO", "WORK", "TEAM", "SNAP", "PINS", "RBLX",
+        # International ADRs
+        "BABA", "JD", "PDD", "BIDU", "NIO", "XPEV", "LI", "TSM", "ASML", "SAP", "BYDDY"
+    ]
+    
+    # Try to get official lists first
     try:
         sp = yf.tickers_sp500() or []
     except Exception:
@@ -338,9 +390,13 @@ def _build_universe(max_size: int = 1800):
         ndq = yf.tickers_nasdaq() or []
     except Exception:
         ndq = []
-    allu = list(dict.fromkeys([_norm_ticker(t) for t in (sp + ndq)]))
-    # Filter out weird tickers (too long or have non-alpha plus-dot except BRK.B style handled upstream via aliasing)
-    cleaned = [t for t in allu if t and len(t) <= 6 and t.isalpha()]
+    
+    # Combine all sources with fallback taking priority
+    all_tickers = fallback_tickers + list(sp) + list(ndq)
+    allu = list(dict.fromkeys([_norm_ticker(t) for t in all_tickers]))
+    
+    # Filter out weird tickers (too long or have non-alpha)
+    cleaned = [t for t in allu if t and len(t) <= 6 and t.replace('.', '').isalnum()]
     _UNIVERSE = cleaned[:max_size] if max_size else cleaned
     _UNIVERSE_BUILT = True
 
@@ -378,6 +434,10 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
     base_prof = fetch_profile(base_ticker_norm)
     base_ind, base_sector, base_mc = base_prof.get("industry"), base_prof.get("sector"), base_prof.get("market_cap")
 
+    # Track already selected peers to avoid duplicates
+    selected_tickers = set()
+    peers = []
+    
     # 1) Same industry
     same_ind = []
     for t in _UNIVERSE:
@@ -386,30 +446,40 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
         if base_ind and pr.get("industry") and pr["industry"] == base_ind:
             same_ind.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
     same_ind.sort(key=lambda x: x[1])
-    peers = [ {"ticker": t} for t,_ in same_ind[:peer_limit] ]
+    for t, _ in same_ind:
+        if len(peers) >= peer_limit: break
+        if t not in selected_tickers:
+            peers.append({"ticker": t})
+            selected_tickers.add(t)
 
     # 2) Fallback: same sector
     if len(peers) < peer_limit:
         same_sec = []
         for t in _UNIVERSE:
-            if t == base_prof["ticker"]: continue
+            if t == base_prof["ticker"] or t in selected_tickers: continue
             pr = fetch_profile(t)
             if base_sector and pr.get("sector") and pr["sector"] == base_sector:
                 same_sec.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
         same_sec.sort(key=lambda x: x[1])
-        needed = peer_limit - len(peers)
-        peers.extend([{"ticker": t} for t,_ in same_sec[:needed]])
+        for t, _ in same_sec:
+            if len(peers) >= peer_limit: break
+            if t not in selected_tickers:
+                peers.append({"ticker": t})
+                selected_tickers.add(t)
 
     # 3) Fallback: any closest market cap
     if len(peers) < peer_limit:
         anyc = []
         for t in _UNIVERSE:
-            if t == base_prof["ticker"]: continue
+            if t == base_prof["ticker"] or t in selected_tickers: continue
             pr = fetch_profile(t)
             anyc.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
         anyc.sort(key=lambda x: x[1])
-        needed = peer_limit - len(peers)
-        peers.extend([{"ticker": t} for t,_ in anyc[:needed]])
+        for t, _ in anyc:
+            if len(peers) >= peer_limit: break
+            if t not in selected_tickers:
+                peers.append({"ticker": t})
+                selected_tickers.add(t)
 
     # Attach names
     peers_named = [{"ticker": p["ticker"], "name": fetch_profile(p["ticker"]).get("name")} for p in peers[:peer_limit]]
@@ -661,12 +731,23 @@ def index():
 <div class="max-w-7xl mx-auto">
   <div class="bg-white rounded-lg shadow-xl p-3 md:p-5 mb-3">
     <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
-    <div class="flex flex-wrap gap-1.5 items-center mb-2">
-      <input id="tickerInput" placeholder="e.g., TSLA" class="w-28 px-2 py-1 border rounded text-sm"/>
-      <button id="findButton" class="px-3 py-1 bg-indigo-600 text-white rounded text-sm">Find Peers</button>
-      <input id="manualInput" placeholder="Add company" class="w-36 px-2 py-1 border rounded text-sm"/>
-      <button id="addButton" class="px-3 py-1 bg-emerald-600 text-white rounded text-sm">Add</button>
+    <!-- Always two lines; inputs auto-size to content -->
+    <div class="flex flex-col gap-2 mb-2">
+      <div class="flex items-center gap-1.5 flex-nowrap">
+        <input id="tickerInput" data-autosize placeholder="e.g., TSLA"
+          class="px-2 py-1 border rounded text-sm w-auto max-w-full" />
+        <button id="findButton" data-row-button
+          class="shrink-0 px-3 py-1 bg-indigo-600 text-white rounded text-sm">Find Peers</button>
+      </div>
+
+      <div class="flex items-center gap-1.5 flex-nowrap">
+        <input id="manualInput" data-autosize placeholder="Add company"
+          class="px-2 py-1 border rounded text-sm w-auto max-w-full" />
+        <button id="addButton" data-row-button
+          class="shrink-0 px-3 py-1 bg-emerald-600 text-white rounded text-sm">Add</button>
+      </div>
     </div>
+
     <div id="error" class="hidden bg-red-50 border-l-4 border-red-500 p-3 mb-3"><p class="text-red-700 text-sm"></p></div>
     <div id="loading" class="hidden text-center py-3"><div class="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div></div>
     <div id="peerInfo" class="hidden bg-indigo-50 rounded-lg p-3 md:p-4 mb-4"></div>

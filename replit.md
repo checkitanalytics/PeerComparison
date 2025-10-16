@@ -205,6 +205,20 @@ Preferred communication style: Simple, everyday language.
 
 **Recent Updates (October 16, 2025)**
 
+**Critical Bug Fix - Peer Finding (October 16, 2025):**
+- **Root Cause**: The `yfinance` library's `tickers_sp500()` and `tickers_nasdaq()` functions were unavailable/deprecated, causing the universe to be empty
+- **Impact**: NO company could find peers - all showed empty peer lists
+- **Solution**: 
+  - Added comprehensive fallback ticker list with 100+ major US companies across all sectors
+  - Includes: Tech (AAPL, MSFT), Retail (HD, LOW), Finance (JPM, BAC), Healthcare, Energy, etc.
+  - Fixed peer deduplication to prevent duplicate peers when falling back across tiers
+- **Verification**: Tested HD (finds LOW), JPM (finds BAC, WFC), DIS (finds NFLX, WBD) - all working ✅
+- **Peer Matching Logic**:
+  1. Specialty groups (MEGA7, eVTOL, EV) checked first
+  2. Same industry match (e.g., HD → LOW both in Home Improvement Retail)
+  3. Fallback to same sector if insufficient peers
+  4. Final fallback to market cap proximity
+
 **Enhanced Primary Company Analysis:**
 - Added explanation of peer ranking system: "(Rankings #rank/total, where #1 is best except OpEx)"
 - Added "Latest quarter metrics" line showing actual values from the comparison table
