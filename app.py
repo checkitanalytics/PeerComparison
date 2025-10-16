@@ -696,8 +696,9 @@ def analyze_primary_company(payload: dict) -> dict:
 
 
 def build_conclusion_text(summary: dict) -> str:
-    p = summary["primary"]; period = summary.get("period") or "Latest Quarter"
-    pr, ts, lt = summary["peer_ranks"], summary["timeseries"], summary["latest"]
+    p = summary["primary"]
+    period = summary.get("period") or "Latest Quarter"
+    ts, lt = summary["timeseries"], summary["latest"]
     deltas = summary.get("peer_deltas", {})
 
     def fmt_money_short(x):
@@ -708,71 +709,85 @@ def build_conclusion_text(summary: dict) -> str:
         if x >= 1_000:         return f"{sign}${x/1_000:.0f}K"
         return f"{sign}${x:.0f}"
 
-    def peer_line(metric, is_pp=False, label=None):
+    # compact peer %/pp line builder
+    def peer_line(metric, *, label=None, pp=False):
+        label = label or metric
         arr = deltas.get(metric, [])
-        parts=[]
-        for d in arr:
-            v = d.get("pp") if is_pp else d.get("pct")
-            parts.append(f"{d['peer']}: " + ("n/a" if v is None else (f"{v:+.1f}pp" if is_pp else f"{v:+.1f}%")))
-        return f"{(label or metric)}: " + (", ".join(parts) if parts else "n/a")
-
-    bullets = [
-        f"{p}: Past-performance takeaway -- {period}.",
-        # NEW peer comparison bullet (highlighted with brackets)
-        "- ►► PEER COMPARISON (primary vs each peer): " +
-        "; ".join([
-            peer_line("Total Revenue"),
-            peer_line("Gross Margin %", is_pp=True, label="GM"),
-            peer_line("Operating Expense", label="OpEx (lower better)"),
-            peer_line("EBIT"),
-            peer_line("Net Income"),
-            peer_line("Free Cash Flow", label="FCF")
-        ]) + "."
-    ]
-
-    # Keep the rest of your concise bullets (latest metrics + trends)
-    peer_context = []
-    if lt.get("revenue") is not None: peer_context.append(f"Revenue {fmt_money_short(lt['revenue'])}")
-    if lt.get("gm") is not None:      peer_context.append(f"GM {lt['gm']:.1f}%")
-    if lt.get("ebit") is not None:    peer_context.append(f"EBIT {fmt_money_short(lt['ebit'])}")
-    if lt.get("ni") is not None:      peer_context.append(f"Net Income {fmt_money_short(lt['ni'])}")
-    if lt.get("fcf") is not None:     peer_context.append(f"FCF {fmt_money_short(lt['fcf'])}")
-    if peer_context:
-        bullets.append(f"\n- ►► LATEST QUARTER METRICS: {'; '.join(peer_context)}.")
-
-    if ts.get("rev_qoq_pct") is not None or ts.get("rev_yoy_pct") is not None:
-        qoq = f"{ts['rev_qoq_pct']:.1f}%" if ts.get('rev_qoq_pct') is not None else "n/a"
-        yoy = f"{ts['rev_yoy_pct']:.1f}%" if ts.get('rev_yoy_pct') is not None else "n/a"
-        bullets.append(f"- Revenue: QoQ {qoq}; YoY {yoy} → {fmt_money_short(lt.get('revenue'))}.")
-    if ts.get("gm_qoq_pp") is not None or ts.get("gm_yoy_pp") is not None or lt.get("gm") is not None:
-        gm_now = f'{lt.get("gm"):.1f}%' if isinstance(lt.get("gm"), (int, float)) else "n/a"
+        if not arr:
+            return f"{label}: n/a"
         parts = []
-        if ts.get("gm_qoq_pp") is not None: parts.append(f"QoQ {ts['gm_qoq_pp']:+.1f}pp")
-        if ts.get("gm_yoy_pp") is not None: parts.append(f"YoY {ts['gm_yoy_pp']:+.1f}pp")
-        bullets.append(f"- Gross margin: {gm_now}" + (f" ({'; '.join(parts)})" if parts else "") + ".")
-    if ts.get("opex_pct_now") is not None:
-        if ts.get("opex_pct_yearago") is not None:
-            d = ts["opex_pct_now"] - ts["opex_pct_yearago"]
-            bullets.append(f"- OpEx ratio: {ts['opex_pct_now']:.1f}% (YoY {d:+.1f}pp).")
-        else:
-            bullets.append(f"- OpEx ratio: {ts['opex_pct_now']:.1f}%.")
+        for d in arr:
+            v = d.get("pp") if pp else d.get("pct")
+            parts.append(f"{d['peer']} " + ("n/a" if v is None else (f"{v:+.1f}pp" if pp else f"{v:+.1f}%")))
+        return f"{label}: " + ", ".join(parts)
 
-    if ts.get("ebit_qoq_pct") is not None or ts.get("ebit_yoy_pct") is not None:
-        qoq = f"{ts['ebit_qoq_pct']:.1f}%" if ts.get('ebit_qoq_pct') is not None else "n/a"
-        yoy = f"{ts['ebit_yoy_pct']:.1f}%" if ts.get('ebit_yoy_pct') is not None else "n/a"
-        bullets.append(f"- EBIT: QoQ {qoq}; YoY {yoy} → {fmt_money_short(lt.get('ebit'))}.")
-    if ts.get("ni_qoq_pct") is not None or ts.get("ni_yoy_pct") is not None:
-        qoq = f"{ts['ni_qoq_pct']:.1f}%" if ts.get('ni_qoq_pct') is not None else "n/a"
-        yoy = f"{ts['ni_yoy_pct']:.1f}%" if ts.get('ni_yoy_pct') is not None else "n/a"
-        bullets.append(f"- Net income: QoQ {qoq}; YoY {yoy} → {fmt_money_short(lt.get('ni'))}.")
+    # helper for % formatting
+    def v(x, suf="%"): return "n/a" if x is None else f"{x:.1f}{suf}"
+
+    bullets = [f"{p}: Past-performance takeaway -- {period}."]
+
+    # ►► PEER COMPARISON (unchanged header + sub-bullets)
+    bullets.append("- ►► PEER COMPARISON:")
+    bullets.append("  • " + peer_line("Total Revenue", label="Revenue"))
+    bullets.append("  • " + peer_line("Operating Expense", label="OpEx (lower better)"))
+    bullets.append("  • " + peer_line("EBIT"))
+    bullets.append("  • " + peer_line("Net Income", label="Net income"))
+    bullets.append("  • " + peer_line("Free Cash Flow", label="Free cash flow"))
+    # (Add this line if you also want margin here)
+    # bullets.append("  • " + peer_line("Gross Margin %", label="GM (pp)", pp=True))
+
+    # ►► LATEST QUARTER METRICS — header with 5 sub-bullets
+    bullets.append("\n- ►► LATEST QUARTER METRICS:")
+    # 1) Revenue
+    bullets.append(
+        "  • Revenue: "
+        f"QoQ {v(ts.get('rev_qoq_pct'))}; "
+        f"YoY {v(ts.get('rev_yoy_pct'))} → {fmt_money_short(lt.get('revenue'))}."
+    )
+    # 2) OpEx (as % of revenue)
+    if ts.get("opex_pct_now") is not None:
+        yoy_pp = None
+        if ts.get("opex_pct_yearago") is not None:
+            yoy_pp = ts["opex_pct_now"] - ts["opex_pct_yearago"]
+        bullets.append(
+            "  • OpEx ratio: "
+            f"{ts['opex_pct_now']:.1f}%"
+            + (f" (YoY {yoy_pp:+.1f}pp)." if yoy_pp is not None else ".")
+        )
+    else:
+        bullets.append("  • OpEx ratio: n/a.")
+    # 3) EBIT
+    bullets.append(
+        "  • EBIT: "
+        f"QoQ {v(ts.get('ebit_qoq_pct'))}; "
+        f"YoY {v(ts.get('ebit_yoy_pct'))} → {fmt_money_short(lt.get('ebit'))}."
+    )
+    # 4) Net income
+    bullets.append(
+        "  • Net income: "
+        f"QoQ {v(ts.get('ni_qoq_pct'))}; "
+        f"YoY {v(ts.get('ni_yoy_pct'))} → {fmt_money_short(lt.get('ni'))}."
+    )
+    # 5) Free cash flow
     if ts.get("fcf_cv_pct") is not None or lt.get("fcf") is not None:
         stability = None
         if ts.get("fcf_cv_pct") is not None:
             stability = "stable" if ts["fcf_cv_pct"] < 25 else "volatile"
         tail = f" ({stability}, CV {ts['fcf_cv_pct']:.0f}%)." if stability else "."
-        bullets.append(f"- Free cash flow: {fmt_money_short(lt.get('fcf'))}{tail}")
+        bullets.append("  • Free cash flow: " + fmt_money_short(lt.get("fcf")) + tail)
+    else:
+        bullets.append("  • Free cash flow: n/a.")
+
+    # (Optional) Keep Gross Margin as a separate normal bullet if you still want it shown:
+    # if any(ts.get(k) is not None for k in ("gm_qoq_pp","gm_yoy_pp")) or lt.get("gm") is not None:
+    #     parts=[]
+    #     if ts.get("gm_qoq_pp") is not None: parts.append(f"QoQ {ts['gm_qoq_pp']:+.1f}pp")
+    #     if ts.get("gm_yoy_pp") is not None: parts.append(f"YoY {ts['gm_yoy_pp']:+.1f}pp")
+    #     gm_now = "n/a" if lt.get("gm") is None else f"{lt['gm']:.1f}%"
+    #     bullets.append(f"- Gross margin: {gm_now}" + (f" ({'; '.join(parts)})" if parts else "") + ".")
 
     return "\n".join(bullets)
+
 
 
 def llm_conclusion_with_deepseek(summary: dict) -> tuple[str, str]:
@@ -1243,6 +1258,139 @@ def peer_key_metrics_conclusion():
             except Exception:
                 pass
         return jsonify({"error": str(e)}), 400
+
+@app.route('/api/primary-company-analysis', methods=['GET'])
+def primary_company_analysis():
+    """
+    GET endpoint for Primary Company Analysis
+    Query params:
+      - ticker: primary company ticker (required)
+      - peers: comma-separated peer tickers (optional, will auto-find if not provided)
+      - lang: 'en' or 'zh' (optional, default 'en')
+    
+    Example: /api/primary-company-analysis?ticker=AAPL&peers=MSFT,GOOGL&lang=en
+    
+    Returns: {
+        "ticker": "AAPL",
+        "period": "2025Q2",
+        "analysis": "...",
+        "language": "en",
+        "llm_provider": "deepseek|perplexity|local-fallback",
+        "peers": ["MSFT", "GOOGL"],
+        "timestamp": "2025-10-16T..."
+    }
+    """
+    from datetime import datetime
+    import time
+    
+    ticker = request.args.get('ticker', '').strip().upper()
+    peers_str = request.args.get('peers', '').strip()
+    lang = request.args.get('lang', 'en').lower()
+    
+    if not ticker:
+        return jsonify({"error": "Missing required parameter: ticker"}), 400
+    
+    try:
+        # Normalize ticker
+        ticker = _norm_ticker(ticker)
+        if not ticker:
+            return jsonify({"error": "Invalid ticker"}), 400
+        
+        # Quick validation: try to fetch basic profile with timeout
+        try:
+            time.sleep(0.5)
+            s = yf.Ticker(ticker)
+            s._session_configured = True
+            info = s.info or {}
+            if not info or info.get('regularMarketPrice') is None:
+                # Invalid ticker - no basic market data
+                return jsonify({"error": f"Invalid or unsupported ticker: {ticker}"}), 404
+        except Exception as e:
+            return jsonify({"error": f"Cannot fetch data for ticker {ticker}: {str(e)}"}), 404
+        
+        # Auto-find peers if not provided
+        if not peers_str:
+            peer_result = select_peers_any_industry(ticker, peer_limit=3)
+            if not peer_result or peer_result.get('error'):
+                return jsonify({"error": f"Could not find peers for {ticker}"}), 404
+            peers = [p['ticker'] for p in peer_result.get('peers', [])]
+        else:
+            peers = [_norm_ticker(p.strip().upper()) for p in peers_str.split(',') if p.strip()]
+            peers = [p for p in peers if p]  # Filter out invalid tickers
+        
+        # Fetch metrics for primary + peers
+        all_tickers = [ticker] + peers
+        metrics = {}
+        for t in all_tickers:
+            metrics[t] = calculate_metrics(t) or {'error': 'Unable to fetch data'}
+        
+        # Validate primary company has data
+        if not metrics.get(ticker) or metrics[ticker].get('error'):
+            return jsonify({"error": f"No financial data available for {ticker}"}), 404
+        
+        # Filter peers with valid data
+        valid_peers = [p for p in peers if metrics.get(p) and not metrics[p].get('error')]
+        
+        # Compute quarters
+        quarters = []
+        for t in [ticker] + valid_peers:
+            t_data = metrics.get(t, {})
+            rev = t_data.get('Total Revenue', {})
+            if isinstance(rev, dict):
+                quarters.extend(rev.keys())
+        quarters = sorted(list(set(quarters)), reverse=True)[:5]
+        
+        # Build payload for analysis
+        latest_period = quarters[0] if quarters else None
+        metric_names = ['Market Cap', 'Total Revenue', 'Gross Margin %', 'Operating Expense', 'EBIT', 'Net Income', 'Free Cash Flow']
+        
+        lq_rows = []
+        for metric in metric_names:
+            row = {"metric": metric}
+            for t in [ticker] + valid_peers:
+                # Market Cap uses "Current" key
+                key = 'Current' if metric == 'Market Cap' else latest_period
+                value = metrics.get(t, {}).get(metric, {}).get(key)
+                row[t] = value if value is not None else None
+            lq_rows.append(row)
+        
+        ts_rows = []
+        for metric in metric_names:
+            values = []
+            for q in quarters:
+                val = metrics.get(ticker, {}).get(metric, {}).get(q)
+                values.append(val if val is not None else None)
+            ts_rows.append({"metric": metric, "values": values})
+        
+        payload = {
+            "primary": ticker,
+            "latest_quarter": {"period": latest_period, "rows": lq_rows},
+            "time_series": {"ticker": ticker, "quarters": quarters, "rows": ts_rows}
+        }
+        
+        # Generate analysis
+        summary = analyze_primary_company(payload)
+        analysis_text, llm_used = llm_conclusion_with_deepseek(summary)
+        
+        # Translate if Chinese requested
+        if lang == 'zh':
+            analysis_zh = translate_to_zh(analysis_text)
+            final_text = analysis_zh if analysis_zh else analysis_text
+        else:
+            final_text = analysis_text
+        
+        return jsonify({
+            "ticker": ticker,
+            "period": latest_period,
+            "analysis": final_text,
+            "language": lang,
+            "llm_provider": llm_used,
+            "peers": valid_peers,
+            "timestamp": datetime.utcnow().isoformat() + 'Z'
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/health')
 def health():
