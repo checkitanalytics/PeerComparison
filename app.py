@@ -815,13 +815,10 @@ def index():
       </div>
 
       <div class="flex items-center gap-1.5 flex-nowrap">
-        <input id="manualInput" data-autosize placeholder="Add company"
+        <input id="manualInput" data-autosize placeholder="Add/Remove company"
           class="px-2 py-1 border rounded text-sm w-auto max-w-full" />
         <button id="addButton" data-row-button
           class="shrink-0 px-3 py-1 bg-emerald-600 text-white rounded text-sm">Add</button>
-        <select id="removeSelect" class="px-2 py-1 border rounded text-sm w-auto max-w-full">
-          <option value="">Select peer to remove</option>
-        </select>
         <button id="removeButton" data-row-button
           class="shrink-0 px-3 py-1 bg-red-600 text-white rounded text-sm">Remove</button>
       </div>
@@ -906,13 +903,8 @@ function displayPeers(d){
   document.getElementById('peerInfo').innerHTML = html;
   document.getElementById('peerInfo').classList.remove('hidden');
   
-  // Update remove dropdown and button state
-  const removeSelect = document.getElementById('removeSelect');
-  const removeButton = document.getElementById('removeButton');
-  removeSelect.innerHTML = '<option value="">Select peer to remove</option>' +
-    allPeers.map(p => `<option value="${p.ticker}">${p.ticker}${p.name ? ' - ' + p.name : ''}</option>`).join('');
-  
   // Disable remove button if no peers available
+  const removeButton = document.getElementById('removeButton');
   removeButton.disabled = allPeers.length === 0;
   removeButton.classList.toggle('opacity-50', allPeers.length === 0);
   removeButton.classList.toggle('cursor-not-allowed', allPeers.length === 0);
@@ -951,15 +943,24 @@ async function addCompany(){
 }
 
 async function removeCompany(){
-  const tickerToRemove = document.getElementById('removeSelect').value.trim().toUpperCase();
-  if (!tickerToRemove) return showError('Please select a peer to remove');
+  const raw = document.getElementById('manualInput').value.trim();
+  if (!raw) return showError('Please enter a ticker/company to remove');
   if (!_peerData) return showError('No peer data available');
-  
-  const primary = _peerData.primary_company;
-  if (tickerToRemove === primary) return showError('Cannot remove the primary company');
   
   hideError(); showLoading(true);
   try{
+    // Resolve input to ticker
+    const r = await fetch('/api/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:raw})});
+    const res = await r.json(); if(!r.ok || res.error) throw new Error(res.error || 'Resolve failed');
+    const tickerToRemove = (res.ticker || '').toUpperCase();
+    if (!tickerToRemove) throw new Error('Could not resolve to a ticker');
+    
+    const primary = _peerData.primary_company;
+    if (tickerToRemove === primary) throw new Error('Cannot remove the primary company');
+    
+    // Check if ticker is in the current comparison
+    if (!_tickers.includes(tickerToRemove)) throw new Error(`${tickerToRemove} is not in the comparison`);
+    
     // Remove from tickers array
     _tickers = _tickers.filter(t => t !== tickerToRemove);
     
@@ -976,8 +977,8 @@ async function removeCompany(){
     renderAll();
     await requestConclusion();
     
-    // Reset dropdown
-    document.getElementById('removeSelect').value = '';
+    // Clear input
+    document.getElementById('manualInput').value = '';
   }catch(e){ showError(e.message); } finally{ showLoading(false); }
 }
 
