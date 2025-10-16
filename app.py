@@ -141,7 +141,14 @@ EVTOL_GROUP = [
     {"ticker": "EH", "name": "EHang Holdings Limited"},
     {"ticker": "JOBY", "name": "Joby Aviation, Inc."},
     {"ticker": "ACHR", "name": "Archer Aviation Inc."},
-    {"ticker": "BLDE", "name": "Blade Air Mobility, Inc."}
+    {"ticker": "BLDE", "name": "Blade Air Mobility, Inc."},
+    {"ticker": "LILM", "name": "Lilium N.V."},
+    {"ticker": "EVTL", "name": "Vertical Aerospace"},
+    {"ticker": "HOVR", "name": "New Horizon Aircraft"},
+    {"ticker": "SPR", "name": "Spirit Aerosystems Holdings"},
+    {"ticker": "ESLT", "name": "Elbit Systems"},
+    {"ticker": "AIR", "name": "AAR Corp."},
+    {"ticker": "ERJ", "name": "Embraer S.A."}
 ]
 EVTOL_TICKERS = {x["ticker"] for x in EVTOL_GROUP}
 
