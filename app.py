@@ -528,16 +528,32 @@ def analyze_primary_company(payload: dict) -> dict:
     peer_rows = lqm.get("rows", []) or []
     period = lqm.get("period") or "Latest"
 
-    if not peer_rows: raise ValueError("latest_quarter.rows missing")
-    peer_keys = [k for k in peer_rows[0].keys() if k != "metric"]
-    if primary not in peer_keys: raise ValueError("Primary not in latest_quarter rows")
+    if not peer_rows:
+        raise ValueError("latest_quarter.rows missing")
 
-    # latest snapshot ranks
+    # peer keys (primary + others)
+    peer_keys = [k for k in peer_rows[0].keys() if k != "metric"]
+    if primary not in peer_keys:
+        raise ValueError("Primary not in latest_quarter rows")
+    other_peers = [k for k in peer_keys if k != primary]
+
+    # map metric -> latest-quarter row
+    metric_row_map = { (r.get("metric") or "").strip(): r for r in peer_rows }
+
+    # build latest snapshot and ranks (kept for other bullets)
+    def safe(v): return v if (v is not None and not (isinstance(v,float) and math.isnan(v))) else None
     latest_metrics = {}
-    for r in peer_rows:
-        m = (r.get("metric") or "").strip()
-        vals = [safe(r.get(t)) for t in peer_keys]
-        latest_metrics[m] = {"primary": safe(r.get(primary)), "peers_values": vals}
+    for mname, row in metric_row_map.items():
+        vals = [safe(row.get(t)) for t in peer_keys]
+        latest_metrics[mname] = {"primary": safe(row.get(primary)), "peers_values": vals}
+
+    def rank_desc(value, peer_values):
+        arr = sorted([x for x in peer_values if x is not None], reverse=True)
+        if value is None or not arr: return None
+        try: return 1 + arr.index(value)
+        except ValueError:
+            diffs = sorted([(abs(value-x), i) for i, x in enumerate(arr)])
+            return 1 + diffs[0][1]
 
     def metric_rank(mname, higher_is_better=True):
         md = latest_metrics.get(mname, {})
@@ -548,19 +564,66 @@ def analyze_primary_company(payload: dict) -> dict:
         n = len([x for x in allv if x is not None])
         return (r, n) if r is not None else (None, n)
 
-    rev_rank = metric_rank("Total Revenue")
-    gm_rank  = metric_rank("Gross Margin %")
-    ebit_rank= metric_rank("EBIT")
-    ni_rank  = metric_rank("Net Income")
-    fcf_rank = metric_rank("Free Cash Flow")
-    opex_rank= metric_rank("Operating Expense", higher_is_better=False)
+    rev_rank  = metric_rank("Total Revenue")
+    gm_rank   = metric_rank("Gross Margin %")
+    ebit_rank = metric_rank("EBIT")
+    ni_rank   = metric_rank("Net Income")
+    fcf_rank  = metric_rank("Free Cash Flow")
+    opex_rank = metric_rank("Operating Expense", higher_is_better=False)
 
-    # time series deltas
+    # ---------- NEW: percentage/pp deltas vs each peer ----------
+    def pct_change(a, b):
+        try:
+            if a is None or b in (None, 0): return None
+            return (a - b) / abs(b) * 100.0
+        except Exception:
+            return None
+
+    peer_deltas = {}  # metric -> [{peer:'XXX', pct:float} or {peer:'XXX', pp:float}]
+    for metric, row in metric_row_map.items():
+        primary_val = safe(row.get(primary))
+        deltas = []
+        for peer in other_peers:
+            peer_val = safe(row.get(peer))
+            if metric.strip().lower() == "gross margin %":
+                diff = None if (primary_val is None or peer_val is None) else (primary_val - peer_val)  # pp
+                deltas.append({"peer": peer, "pp": diff})
+            else:
+                deltas.append({"peer": peer, "pct": pct_change(primary_val, peer_val)})
+        peer_deltas[metric] = deltas
+    # ------------------------------------------------------------
+
+    # time series calcs (unchanged)
     quarters = ts.get("quarters", []) or []
     rows = ts.get("rows", []) or []
-    rev_row, gm_row = get_ts_metric(rows,"Total Revenue"), get_ts_metric(rows,"Gross Margin %")
-    opex_row, ebit_row = get_ts_metric(rows,"Operating Expense"), get_ts_metric(rows,"EBIT")
-    ni_row, fcf_row = get_ts_metric(rows,"Net Income"), get_ts_metric(rows,"Free Cash Flow")
+    def get_ts_metric(name):
+        n = (name or "").strip().lower()
+        for r in rows:
+            if (r.get("metric","").strip().lower()) == n: return r
+        return None
+
+    rev_row  = get_ts_metric("Total Revenue")
+    gm_row   = get_ts_metric("Gross Margin %")
+    opex_row = get_ts_metric("Operating Expense")
+    ebit_row = get_ts_metric("EBIT")
+    ni_row   = get_ts_metric("Net Income")
+    fcf_row  = get_ts_metric("Free Cash Flow")
+
+    def pct(n, d):
+        try:
+            if d in (0, None) or n is None: return None
+            return (n - d) / abs(d) * 100.0
+        except Exception: return None
+
+    def ppoints(n, d):
+        try:
+            if n is None or d is None: return None
+            return (n - d) * 100.0
+        except Exception: return None
+
+    def latest_of(row):
+        vals = row.get("values", [])
+        return safe(vals[0]) if vals else None
 
     def qoq(row): return None if not row or len(row.get("values",[]))<2 else pct(row["values"][0], row["values"][1])
     def yoy(row): return None if not row or len(row.get("values",[]))<5 else pct(row["values"][0], row["values"][4])
@@ -602,6 +665,7 @@ def analyze_primary_company(payload: dict) -> dict:
             "ebit_rank": ebit_rank, "net_income_rank": ni_rank,
             "fcf_rank": fcf_rank, "opex_rank": opex_rank
         },
+        "peer_deltas": peer_deltas,          # <-- NEW
         "timeseries": {
             "quarters": quarters,
             "rev_qoq_pct": rev_qoq, "rev_yoy_pct": rev_yoy,
@@ -614,37 +678,51 @@ def analyze_primary_company(payload: dict) -> dict:
         "latest": latest
     }
 
+
 def build_conclusion_text(summary: dict) -> str:
-    """Deterministic local fallback (English)."""
     p = summary["primary"]; period = summary.get("period") or "Latest Quarter"
     pr, ts, lt = summary["peer_ranks"], summary["timeseries"], summary["latest"]
+    deltas = summary.get("peer_deltas", {})
 
-    def rank_str(lbl, tup):
-        if not tup or tup[0] is None or tup[1] is None: return f"{lbl}: n/a"
-        r, n = tup; return f"{lbl}: #{r}/{n}" if r!=1 else f"{lbl}: #1/{n}"
+    def fmt_money_short(x):
+        if x is None: return "n/a"
+        sign = "-" if x < 0 else ""; x = abs(x)
+        if x >= 1_000_000_000: return f"{sign}${x/1_000_000_000:.1f}B"
+        if x >= 1_000_000:     return f"{sign}${x/1_000_000:.0f}M"
+        if x >= 1_000:         return f"{sign}${x/1_000:.0f}K"
+        return f"{sign}${x:.0f}"
+
+    def peer_line(metric, is_pp=False, label=None):
+        arr = deltas.get(metric, [])
+        parts=[]
+        for d in arr:
+            v = d.get("pp") if is_pp else d.get("pct")
+            parts.append(f"{d['peer']}: " + ("n/a" if v is None else (f"{v:+.1f}pp" if is_pp else f"{v:+.1f}%")))
+        return f"{(label or metric)}: " + (", ".join(parts) if parts else "n/a")
 
     bullets = [
-        f"{p}: Past-performance takeaway — {period}.",
-        f"- Peer snapshot (Rankings #rank/total, where #1 is best except OpEx): {rank_str('Revenue',pr.get('revenue_rank'))}; {rank_str('GM',pr.get('gross_margin_rank'))}; "
-        f"{rank_str('EBIT',pr.get('ebit_rank'))}; {rank_str('Net income',pr.get('net_income_rank'))}; "
-        f"{rank_str('FCF',pr.get('fcf_rank'))}; {rank_str('OpEx (lower better)',pr.get('opex_rank'))}.",
+        f"{p}: Past–performance takeaway — {period}.",
+        # NEW peer comparison bullet
+        "- Peer comparison (primary vs each peer): " +
+        "; ".join([
+            peer_line("Total Revenue"),
+            peer_line("Gross Margin %", is_pp=True, label="GM"),
+            peer_line("Operating Expense", label="OpEx (lower better)"),
+            peer_line("EBIT"),
+            peer_line("Net Income"),
+            peer_line("Free Cash Flow", label="FCF")
+        ]) + "."
     ]
-    
-    # Add peer group context with actual values
-    peer_context_parts = []
-    if lt.get("revenue") is not None:
-        peer_context_parts.append(f"Revenue {fmt_money_short(lt['revenue'])}")
-    if lt.get("gm") is not None:
-        peer_context_parts.append(f"GM {lt['gm']:.1f}%")
-    if lt.get("ebit") is not None:
-        peer_context_parts.append(f"EBIT {fmt_money_short(lt['ebit'])}")
-    if lt.get("ni") is not None:
-        peer_context_parts.append(f"Net Income {fmt_money_short(lt['ni'])}")
-    if lt.get("fcf") is not None:
-        peer_context_parts.append(f"FCF {fmt_money_short(lt['fcf'])}")
-    
-    if peer_context_parts:
-        bullets.append(f"- Latest quarter metrics: {'; '.join(peer_context_parts)}.")
+
+    # Keep the rest of your concise bullets (latest metrics + trends)
+    peer_context = []
+    if lt.get("revenue") is not None: peer_context.append(f"Revenue {fmt_money_short(lt['revenue'])}")
+    if lt.get("gm") is not None:      peer_context.append(f"GM {lt['gm']:.1f}%")
+    if lt.get("ebit") is not None:    peer_context.append(f"EBIT {fmt_money_short(lt['ebit'])}")
+    if lt.get("ni") is not None:      peer_context.append(f"Net Income {fmt_money_short(lt['ni'])}")
+    if lt.get("fcf") is not None:     peer_context.append(f"FCF {fmt_money_short(lt['fcf'])}")
+    if peer_context:
+        bullets.append(f"- Latest quarter metrics: {'; '.join(peer_context)}.")
 
     if ts.get("rev_qoq_pct") is not None or ts.get("rev_yoy_pct") is not None:
         qoq = f"{ts['rev_qoq_pct']:.1f}%" if ts.get('rev_qoq_pct') is not None else "n/a"
@@ -680,6 +758,7 @@ def build_conclusion_text(summary: dict) -> str:
 
     return "\n".join(bullets)
 
+
 def llm_conclusion_with_deepseek(summary: dict) -> tuple[str, str]:
     """DeepSeek phrasing with Perplexity fallback; final fallback to local builder.
     Returns: (conclusion_text, llm_used)
@@ -687,25 +766,20 @@ def llm_conclusion_with_deepseek(summary: dict) -> tuple[str, str]:
     system = {"role":"system","content":"You are a finance analyst. Use ONLY numbers provided in the JSON. Be concise and factual."}
     user = {"role":"user","content": json.dumps({
         "task": "Write analyst-style past-performance summary for PRIMARY only.",
-        "style": "5–8 bullets; include ranks vs peers with explanation, actual metric values, growth, margin pp deltas, OpEx ratio, EBIT/NI, FCF stability.",
+        "style": "5–8 bullets; concise; numeric-first; avoid speculation.",
         "format": [
             "Start with '<TICKER>: Past-performance takeaway — <period>.'",
-            "Second bullet: 'Peer snapshot (Rankings #rank/total, where #1 is best except OpEx): Revenue: #X/Y; GM: #X/Y; EBIT: #X/Y; Net income: #X/Y; FCF: #X/Y; OpEx (lower better): #X/Y.'",
-            "Third bullet: 'Latest quarter metrics: Revenue $XXB; GM XX%; EBIT $XXB; Net Income $XXB; FCF $XXB.' (use actual values from data.latest)",
-            "Bullets use '-' prefix; keep each under ~200 chars.",
-            "1 decimal for %; 'pp' for margin deltas."
+            "Second bullet: 'Peer comparison (primary vs each peer): show percentage differences for Revenue, OpEx, EBIT, Net Income, Free Cash Flow and percentage-point (pp) differences for Gross Margin. Format example: Revenue vs META +12%, vs AMZN -5%; GM +1.6pp/+0.8pp; OpEx (lower better) -3%/-2%; EBIT ...'",
+            "Include a bullet with latest-quarter actual values (Revenue, GM, EBIT, Net Income, FCF).",
+            "Include growth/pp-delta bullets based on time-series if available.",
+            "Bullets start with '-' and keep each under ~200 characters."
         ],
         "data": summary
     }, ensure_ascii=False)}
-    
     out = deepseek_chat([system, user], temperature=0.1)
-    if out:
-        return (out, "deepseek")
-    
+    if out: return (out, "deepseek")
     out = perplexity_chat([system, user], temperature=0.2)
-    if out:
-        return (out, "perplexity")
-    
+    if out: return (out, "perplexity")
     return (build_conclusion_text(summary), "local-fallback")
 
 def translate_to_zh(text: str) -> str | None:
