@@ -835,7 +835,15 @@ def index():
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-2 md:p-4">
 <div class="max-w-7xl mx-auto">
   <div class="bg-white rounded-lg shadow-xl p-3 md:p-5 mb-3">
-    <h1 class="text-xl md:text-3xl font-bold text-gray-800 mb-2">Peer Company Key Metrics Comparison</h1>
+    <div class="flex items-center justify-between mb-2">
+      <h1 class="text-xl md:text-3xl font-bold text-gray-800">Peer Company Key Metrics Comparison</h1>
+      <a href="https://equityresearch.checkitanalytics.com/" 
+         class="flex items-center justify-center w-10 h-10 md:w-12 md:h-12 bg-white border-2 border-gray-300 rounded-xl hover:bg-gray-50 transition-colors">
+        <svg class="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+        </svg>
+      </a>
+    </div>
     <!-- Always two lines; inputs auto-size to content -->
     <div class="flex flex-col gap-2 mb-2">
       <div class="flex items-center gap-1.5 flex-nowrap">
