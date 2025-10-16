@@ -112,10 +112,52 @@ COMMON_NAME_MAP = {
     "google": "GOOGL", "alphabet": "GOOGL", "meta": "META", "facebook": "META",
     "nvidia": "NVDA", "netflix": "NFLX", "boeing": "BA", "airbus": "AIR.PA"
 }
-PEER_TICKER_ALIAS = {"GOOG": "GOOGL", "FB": "META"}
-def _norm_ticker(t: str) -> str:
+
+# -----------------------------
+# Peer groups & profiles
+# -----------------------------
+PEER_TICKER_ALIAS = {"GOOG": "GOOGL", "FB": "META", "SRTA": "BLDE", "BLADE": "BLDE"}
+
+def _normalize_peer_ticker(t: str) -> str:
     u = (t or "").upper().strip()
     return PEER_TICKER_ALIAS.get(u, u)
+
+def _norm_ticker(t: str) -> str:
+    """Alias for backward compatibility"""
+    return _normalize_peer_ticker(t)
+
+MEGA7 = [
+    {"ticker": "AAPL", "name": "Apple Inc."},
+    {"ticker": "MSFT", "name": "Microsoft Corporation"},
+    {"ticker": "GOOGL", "name": "Alphabet Inc. (Class A)"},
+    {"ticker": "AMZN", "name": "Amazon.com, Inc."},
+    {"ticker": "META", "name": "Meta Platforms, Inc."},
+    {"ticker": "NVDA", "name": "NVIDIA Corporation"},
+    {"ticker": "TSLA", "name": "Tesla, Inc."}
+]
+MEGA7_TICKERS = {x["ticker"] for x in MEGA7}
+
+EVTOL_GROUP = [
+    {"ticker": "EH", "name": "EHang Holdings Limited"},
+    {"ticker": "JOBY", "name": "Joby Aviation, Inc."},
+    {"ticker": "ACHR", "name": "Archer Aviation Inc."},
+    {"ticker": "BLDE", "name": "Blade Air Mobility, Inc."}
+]
+EVTOL_TICKERS = {x["ticker"] for x in EVTOL_GROUP}
+
+EV_GROUP = [
+    {"ticker": "RIVN", "name": "Rivian Automotive, Inc."},
+    {"ticker": "LCID", "name": "Lucid Group, Inc."},
+    {"ticker": "NIO", "name": "NIO Inc."},
+    {"ticker": "XPEV", "name": "XPeng Inc."},
+    {"ticker": "LI", "name": "Li Auto Inc."},
+    {"ticker": "ZK", "name": "ZEEKR Intelligent Technology Holding Limited"},
+    {"ticker": "PSNY", "name": "Polestar Automotive Holding UK PLC"},
+    {"ticker": "BYDDY", "name": "BYD Company Limited"},
+    {"ticker": "VFS", "name": "VinFast Auto Ltd."},
+    {"ticker": "WKHS", "name": "Workhorse Group Inc."}
+]
+EV_TICKERS = {x["ticker"] for x in EV_GROUP}
 
 def _verify_ticker_with_yfinance(ticker: str) -> dict | None:
     try:
@@ -310,13 +352,30 @@ def _ratio_score(base_mc, mc):
 
 def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
     """
-    Choose peers from a broad universe:
+    Choose peers from specialty groups or broad universe:
+      0) Check if ticker is in MEGA7, EVTOL_GROUP, or EV_GROUP → return group peers
       1) Try SAME INDUSTRY → closest market cap
       2) If insufficient, use SAME SECTOR → closest market cap
       3) If still insufficient, pick any tickers closest in market cap
     """
+    base_ticker_norm = _normalize_peer_ticker(base_ticker)
+    
+    # 0) Check specialty groups first
+    if base_ticker_norm in MEGA7_TICKERS:
+        peers = [p for p in MEGA7 if p["ticker"] != base_ticker_norm][:peer_limit]
+        return {"primary_company": base_ticker_norm, "industry": "Magnificent 7 Tech Giants", "peers": peers}
+    
+    if base_ticker_norm in EVTOL_TICKERS:
+        peers = [p for p in EVTOL_GROUP if p["ticker"] != base_ticker_norm][:peer_limit]
+        return {"primary_company": base_ticker_norm, "industry": "eVTOL / Urban Air Mobility", "peers": peers}
+    
+    if base_ticker_norm in EV_TICKERS:
+        peers = [p for p in EV_GROUP if p["ticker"] != base_ticker_norm][:peer_limit]
+        return {"primary_company": base_ticker_norm, "industry": "Electric Vehicle Manufacturers", "peers": peers}
+    
+    # Standard peer selection logic
     _build_universe()
-    base_prof = fetch_profile(base_ticker)
+    base_prof = fetch_profile(base_ticker_norm)
     base_ind, base_sector, base_mc = base_prof.get("industry"), base_prof.get("sector"), base_prof.get("market_cap")
 
     # 1) Same industry

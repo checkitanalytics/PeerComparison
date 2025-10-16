@@ -36,6 +36,13 @@ Preferred communication style: Simple, everyday language.
 - RESTful API endpoints for peer discovery and metrics fetching
 - CORS enabled for development flexibility
 
+**Specialty Peer Groups**
+- **MEGA7 (Magnificent 7 Tech Giants)**: AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA
+- **eVTOL / Urban Air Mobility**: EH, JOBY, ACHR, BLDE
+- **Electric Vehicle Manufacturers**: RIVN, LCID, NIO, XPEV, LI, ZK, PSNY, BYDDY, VFS, WKHS
+- **Ticker Aliases**: GOOG→GOOGL, FB→META, SRTA→BLDE, BLADE→BLDE
+- When a user searches for a company in a specialty group, peers are automatically selected from that group
+
 **AI-Powered Analysis (Multi-Provider with Fallbacks)**
 - **Primary Provider**: DeepSeek API (deepseek-v3.2-exp model)
 - **Fallback Provider**: Perplexity AI (llama-3.1-sonar-small-128k-online model)
@@ -69,8 +76,11 @@ Preferred communication style: Simple, everyday language.
 
 **POST /api/find-peers**
 - Accepts: `{ "ticker": "AAPL" }`
-- Returns: JSON with primary company, industry, and 3 peer companies
-- Uses OpenAI GPT-4 for intelligent peer matching
+- Returns: JSON with primary company, industry/group, and 2 peer companies
+- **Peer Selection Logic**:
+  1. Check if ticker is in specialty groups (MEGA7, eVTOL, EV) → return group peers
+  2. Otherwise, use industry-based peer matching (same industry → same sector → market cap)
+- Supports ticker aliases (GOOG→GOOGL, FB→META, BLADE→BLDE)
 
 **POST /api/get-metrics**
 - Accepts: `{ "tickers": ["AAPL", "MSFT", "GOOGL", "AMZN"] }`
@@ -192,6 +202,14 @@ Preferred communication style: Simple, everyday language.
 - Responsive UI with loading indicators
 
 **Recent Updates (October 16, 2025)**
+
+**Specialty Peer Groups Integration:**
+- Added 3 self-defined specialty peer groups for better peer matching
+- **MEGA7**: Magnificent 7 tech giants (AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA)
+- **eVTOL Group**: Urban air mobility companies (EH, JOBY, ACHR, BLDE)
+- **EV Group**: Electric vehicle manufacturers (RIVN, LCID, NIO, XPEV, LI, ZK, PSNY, BYDDY, VFS, WKHS)
+- Ticker aliases support: GOOG→GOOGL, FB→META, SRTA→BLDE, BLADE→BLDE
+- Peer selection prioritizes specialty groups before falling back to industry/sector matching
 
 **Perplexity AI Fallback Integration:**
 - Added Perplexity AI as a fallback provider for financial analysis
