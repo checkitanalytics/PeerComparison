@@ -91,6 +91,8 @@ Preferred communication style: Simple, everyday language.
 - Accepts: `{ "primary": "TSLA", "latest_quarter": {...}, "time_series": {...} }`
 - Returns: AI-generated financial analysis with multi-provider fallback
 - Analysis includes:
+  - **Enhanced peer snapshot with explanation**: Rankings shown as "#rank/total, where #1 is best except OpEx"
+  - **Latest quarter metrics with actual values**: Revenue, GM%, EBIT, Net Income, FCF
   - 5-quarter time series trend analysis (revenue, margins, profitability)
   - Latest quarter peer comparison with rankings
   - Notable strengths and concerns
@@ -202,6 +204,13 @@ Preferred communication style: Simple, everyday language.
 - Responsive UI with loading indicators
 
 **Recent Updates (October 16, 2025)**
+
+**Enhanced Primary Company Analysis:**
+- Added explanation of peer ranking system: "(Rankings #rank/total, where #1 is best except OpEx)"
+- Added "Latest quarter metrics" line showing actual values from the comparison table
+- Includes: Revenue (in B/M), Gross Margin %, EBIT, Net Income, Free Cash Flow
+- Makes peer comparison more intuitive and informative for users
+- Applied to both AI-generated and local fallback analysis
 
 **Specialty Peer Groups Integration:**
 - Added 3 self-defined specialty peer groups for better peer matching

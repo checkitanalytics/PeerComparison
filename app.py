@@ -555,10 +555,26 @@ def build_conclusion_text(summary: dict) -> str:
 
     bullets = [
         f"{p}: Past-performance takeaway — {period}.",
-        f"- Peer snapshot: {rank_str('Revenue',pr.get('revenue_rank'))}; {rank_str('GM',pr.get('gross_margin_rank'))}; "
+        f"- Peer snapshot (Rankings #rank/total, where #1 is best except OpEx): {rank_str('Revenue',pr.get('revenue_rank'))}; {rank_str('GM',pr.get('gross_margin_rank'))}; "
         f"{rank_str('EBIT',pr.get('ebit_rank'))}; {rank_str('Net income',pr.get('net_income_rank'))}; "
         f"{rank_str('FCF',pr.get('fcf_rank'))}; {rank_str('OpEx (lower better)',pr.get('opex_rank'))}.",
     ]
+    
+    # Add peer group context with actual values
+    peer_context_parts = []
+    if lt.get("revenue") is not None:
+        peer_context_parts.append(f"Revenue {fmt_money_short(lt['revenue'])}")
+    if lt.get("gm") is not None:
+        peer_context_parts.append(f"GM {lt['gm']:.1f}%")
+    if lt.get("ebit") is not None:
+        peer_context_parts.append(f"EBIT {fmt_money_short(lt['ebit'])}")
+    if lt.get("ni") is not None:
+        peer_context_parts.append(f"Net Income {fmt_money_short(lt['ni'])}")
+    if lt.get("fcf") is not None:
+        peer_context_parts.append(f"FCF {fmt_money_short(lt['fcf'])}")
+    
+    if peer_context_parts:
+        bullets.append(f"- Latest quarter metrics: {'; '.join(peer_context_parts)}.")
 
     if ts.get("rev_qoq_pct") is not None or ts.get("rev_yoy_pct") is not None:
         qoq = f"{ts['rev_qoq_pct']:.1f}%" if ts.get('rev_qoq_pct') is not None else "n/a"
@@ -601,9 +617,11 @@ def llm_conclusion_with_deepseek(summary: dict) -> tuple[str, str]:
     system = {"role":"system","content":"You are a finance analyst. Use ONLY numbers provided in the JSON. Be concise and factual."}
     user = {"role":"user","content": json.dumps({
         "task": "Write analyst-style past-performance summary for PRIMARY only.",
-        "style": "4–7 bullets; include ranks vs peers, growth, margin pp deltas, OpEx ratio, EBIT/NI, FCF stability.",
+        "style": "5–8 bullets; include ranks vs peers with explanation, actual metric values, growth, margin pp deltas, OpEx ratio, EBIT/NI, FCF stability.",
         "format": [
             "Start with '<TICKER>: Past-performance takeaway — <period>.'",
+            "Second bullet: 'Peer snapshot (Rankings #rank/total, where #1 is best except OpEx): Revenue: #X/Y; GM: #X/Y; EBIT: #X/Y; Net income: #X/Y; FCF: #X/Y; OpEx (lower better): #X/Y.'",
+            "Third bullet: 'Latest quarter metrics: Revenue $XXB; GM XX%; EBIT $XXB; Net Income $XXB; FCF $XXB.' (use actual values from data.latest)",
             "Bullets use '-' prefix; keep each under ~200 chars.",
             "1 decimal for %; 'pp' for margin deltas."
         ],
