@@ -819,6 +819,11 @@ def index():
           class="px-2 py-1 border rounded text-sm w-auto max-w-full" />
         <button id="addButton" data-row-button
           class="shrink-0 px-3 py-1 bg-emerald-600 text-white rounded text-sm">Add</button>
+        <select id="removeSelect" class="px-2 py-1 border rounded text-sm w-auto max-w-full">
+          <option value="">Select peer to remove</option>
+        </select>
+        <button id="removeButton" data-row-button
+          class="shrink-0 px-3 py-1 bg-red-600 text-white rounded text-sm">Remove</button>
       </div>
     </div>
 
@@ -844,13 +849,14 @@ const COLORS = ['#8884d8','#82ca9d','#ffc658','#ff8042','#a4de6c','#d0ed57','#8d
 
 function showError(msg){ const d=document.getElementById('error'); d.querySelector('p').textContent=msg; d.classList.remove('hidden'); }
 function hideError(){ document.getElementById('error').classList.add('hidden'); }
-function showLoading(b){ document.getElementById('loading').classList.toggle('hidden',!b); document.getElementById('findButton').disabled=b; document.getElementById('addButton').disabled=b; }
+function showLoading(b){ document.getElementById('loading').classList.toggle('hidden',!b); document.getElementById('findButton').disabled=b; document.getElementById('addButton').disabled=b; document.getElementById('removeButton').disabled=b; }
 function uniqUpper(arr){ const s=new Set(); const out=[]; for(const x of arr){ const y=(x||'').toUpperCase(); if(!s.has(y)){ s.add(y); out.push(y);} } return out; }
 
 document.getElementById('tickerInput').addEventListener('keypress', e => { if (e.key==='Enter') resolveAndFind(); });
 document.getElementById('manualInput').addEventListener('keypress', e => { if (e.key==='Enter') addCompany(); });
 document.getElementById('findButton').onclick = resolveAndFind;
 document.getElementById('addButton').onclick  = addCompany;
+document.getElementById('removeButton').onclick = removeCompany;
 
 async function resolveAndFind(){
   const raw = document.getElementById('tickerInput').value.trim();
@@ -899,6 +905,17 @@ function displayPeers(d){
     </div>`;
   document.getElementById('peerInfo').innerHTML = html;
   document.getElementById('peerInfo').classList.remove('hidden');
+  
+  // Update remove dropdown and button state
+  const removeSelect = document.getElementById('removeSelect');
+  const removeButton = document.getElementById('removeButton');
+  removeSelect.innerHTML = '<option value="">Select peer to remove</option>' +
+    allPeers.map(p => `<option value="${p.ticker}">${p.ticker}${p.name ? ' - ' + p.name : ''}</option>`).join('');
+  
+  // Disable remove button if no peers available
+  removeButton.disabled = allPeers.length === 0;
+  removeButton.classList.toggle('opacity-50', allPeers.length === 0);
+  removeButton.classList.toggle('cursor-not-allowed', allPeers.length === 0);
 }
 
 async function addCompany(){
@@ -930,6 +947,37 @@ async function addCompany(){
     await requestConclusion();
     document.getElementById('manualInput').value='';
     document.getElementById('results').classList.remove('hidden');
+  }catch(e){ showError(e.message); } finally{ showLoading(false); }
+}
+
+async function removeCompany(){
+  const tickerToRemove = document.getElementById('removeSelect').value.trim().toUpperCase();
+  if (!tickerToRemove) return showError('Please select a peer to remove');
+  if (!_peerData) return showError('No peer data available');
+  
+  const primary = _peerData.primary_company;
+  if (tickerToRemove === primary) return showError('Cannot remove the primary company');
+  
+  hideError(); showLoading(true);
+  try{
+    // Remove from tickers array
+    _tickers = _tickers.filter(t => t !== tickerToRemove);
+    
+    // Remove from peers or manual peers
+    _peerData.peers = _peerData.peers.filter(p => p.ticker !== tickerToRemove);
+    _manualPeers = _manualPeers.filter(p => p.ticker !== tickerToRemove);
+    
+    // Remove from metrics data
+    delete _metricsData[tickerToRemove];
+    
+    // Update display
+    displayPeers(_peerData);
+    _quarters = computeQuarters(_metricsData, _tickers);
+    renderAll();
+    await requestConclusion();
+    
+    // Reset dropdown
+    document.getElementById('removeSelect').value = '';
   }catch(e){ showError(e.message); } finally{ showLoading(false); }
 }
 
