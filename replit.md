@@ -36,11 +36,13 @@ Preferred communication style: Simple, everyday language.
 - RESTful API endpoints for peer discovery and metrics fetching
 - CORS enabled for development flexibility
 
-**AI-Powered Peer Discovery**
-- **Library**: OpenAI API (GPT-4)
-- **Purpose**: Automatically identify 3 peer companies based on industry and market cap
-- **Input**: User-provided stock ticker symbol
-- **Output**: JSON response with peer company tickers and names
+**AI-Powered Analysis (Multi-Provider with Fallbacks)**
+- **Primary Provider**: DeepSeek API (deepseek-v3.2-exp model)
+- **Fallback Provider**: Perplexity AI (llama-3.1-sonar-small-128k-online model)
+- **Final Fallback**: Local deterministic text builder
+- **Purpose**: Generate analyst-style financial conclusions and translations
+- **Input**: Company financial metrics and peer comparison data
+- **Output**: Concise, factual financial analysis with ranking insights
 
 **Data Fetching Layer**
 - **Library**: yfinance (Yahoo Finance API wrapper)
@@ -77,17 +79,30 @@ Preferred communication style: Simple, everyday language.
 
 **POST /api/peer-key-metrics-conclusion**
 - Accepts: `{ "primary": "TSLA", "latest_quarter": {...}, "time_series": {...} }`
-- Returns: AI-generated financial analysis using OpenAI GPT-4
+- Returns: AI-generated financial analysis with multi-provider fallback
 - Analysis includes:
   - 5-quarter time series trend analysis (revenue, margins, profitability)
-  - Latest quarter peer comparison
+  - Latest quarter peer comparison with rankings
   - Notable strengths and concerns
-- Fallback to basic summary if OpenAI fails
+- **AI Provider Cascade**:
+  1. DeepSeek API (primary)
+  2. Perplexity AI (fallback)
+  3. Local deterministic builder (final fallback)
+- Response indicates which provider was used: `"llm": "deepseek|perplexity|local-fallback"`
 
 **GET /api/health**
 - Health check endpoint
-- Verifies OpenAI API configuration
-- Returns: `{ "status": "ok", "openai_configured": true/false }`
+- Verifies AI provider configurations
+- Returns: 
+  ```json
+  {
+    "status": "healthy",
+    "deepseek_configured": true/false,
+    "deepseek_model": "deepseek-v3.2-exp",
+    "perplexity_configured": true/false,
+    "perplexity_model": "llama-3.1-sonar-small-128k-online"
+  }
+  ```
 
 ### Visualization Features
 
@@ -131,11 +146,24 @@ Preferred communication style: Simple, everyday language.
 
 ### External Dependencies
 
-**OpenAI API**
-- **Purpose**: Intelligent peer company identification
-- **Model**: GPT-4
-- **Authentication**: API key stored in OPENAI_API_KEY environment variable
-- **Usage**: Single API call per peer discovery request
+**AI Service Providers (Multi-Provider Architecture)**
+
+**DeepSeek API (Primary)**
+- **Purpose**: Financial analysis and conclusion generation
+- **Model**: deepseek-v3.2-exp
+- **Authentication**: API key stored in DEEPSEEK_API_KEY environment variable
+- **Usage**: Primary AI provider for all text generation
+
+**Perplexity AI (Fallback)**
+- **Purpose**: Backup AI provider when DeepSeek is unavailable
+- **Model**: llama-3.1-sonar-small-128k-online
+- **Authentication**: API key stored in PERPLEXITY_API_KEY environment variable
+- **Usage**: Automatic fallback when DeepSeek fails or is unconfigured
+
+**Local Deterministic Builder (Final Fallback)**
+- **Purpose**: Guaranteed text generation when no AI provider is available
+- **Implementation**: Template-based conclusion builder using pure Python
+- **Usage**: Final fallback to ensure the app always returns results
 
 **Yahoo Finance API (via yfinance)**
 - **Purpose**: Real-time quarterly financial data
@@ -148,8 +176,7 @@ Preferred communication style: Simple, everyday language.
 - `flask-cors`: Cross-origin resource sharing support
 - `yfinance`: Yahoo Finance API wrapper
 - `pandas`: Data manipulation and analysis
-- `openai`: OpenAI API client
-- `httpx==0.23.3`: HTTP client (pinned version for OpenAI compatibility)
+- `requests`: HTTP client for AI API calls (DeepSeek, Perplexity)
 
 ### Design Patterns
 
@@ -164,7 +191,17 @@ Preferred communication style: Simple, everyday language.
 - Client-side chart rendering
 - Responsive UI with loading indicators
 
-**Recent Updates (October 15, 2025)**
+**Recent Updates (October 16, 2025)**
+
+**Perplexity AI Fallback Integration:**
+- Added Perplexity AI as a fallback provider for financial analysis
+- Multi-provider cascade: DeepSeek → Perplexity → Local Builder
+- Perplexity uses llama-3.1-sonar-small-128k-online model
+- API configuration via PERPLEXITY_API_KEY environment variable
+- Accurate tracking of which AI provider generated each conclusion
+- Updated health endpoint to show all provider configurations
+
+**Previous Updates (October 15, 2025)**
 
 **Critical Bug Fix - Yahoo Finance Data Fetching:**
 - Fixed pandas DataFrame boolean evaluation error in calculate_metrics function

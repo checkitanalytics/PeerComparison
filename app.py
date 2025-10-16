@@ -31,6 +31,12 @@ DEEPSEEK_API_KEY  = os.environ.get("DEEPSEEK_API_KEY")
 DEEPSEEK_API_BASE = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL    = os.environ.get("DEEPSEEK_MODEL", "deepseek-v3.2-exp")
 
+# -----------------------------
+# Perplexity config (fallback)
+# -----------------------------
+PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
+PERPLEXITY_MODEL   = os.environ.get("PERPLEXITY_MODEL", "llama-3.1-sonar-small-128k-online")
+
 # ============================================================
 # Helpers
 # ============================================================
@@ -67,6 +73,29 @@ def deepseek_chat(messages, temperature=0.1, timeout=30) -> str | None:
             f"{DEEPSEEK_API_BASE}/chat/completions",
             headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
             json={"model": DEEPSEEK_MODEL, "temperature": temperature, "messages": messages},
+            timeout=timeout
+        )
+        r.raise_for_status()
+        data = r.json()
+        return (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip() or None
+    except Exception:
+        return None
+
+def perplexity_chat(messages, temperature=0.2, timeout=30) -> str | None:
+    """Perplexity AI fallback wrapper. Returns text or None."""
+    if not PERPLEXITY_API_KEY:
+        return None
+    try:
+        r = requests.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={"Authorization": f"Bearer {PERPLEXITY_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": PERPLEXITY_MODEL,
+                "temperature": temperature,
+                "messages": messages,
+                "top_p": 0.9,
+                "stream": False
+            },
             timeout=timeout
         )
         r.raise_for_status()
@@ -506,8 +535,10 @@ def build_conclusion_text(summary: dict) -> str:
 
     return "\n".join(bullets)
 
-def llm_conclusion_with_deepseek(summary: dict) -> str:
-    """DeepSeek phrasing; fallback to local builder."""
+def llm_conclusion_with_deepseek(summary: dict) -> tuple[str, str]:
+    """DeepSeek phrasing with Perplexity fallback; final fallback to local builder.
+    Returns: (conclusion_text, llm_used)
+    """
     system = {"role":"system","content":"You are a finance analyst. Use ONLY numbers provided in the JSON. Be concise and factual."}
     user = {"role":"user","content": json.dumps({
         "task": "Write analyst-style past-performance summary for PRIMARY only.",
@@ -519,8 +550,16 @@ def llm_conclusion_with_deepseek(summary: dict) -> str:
         ],
         "data": summary
     }, ensure_ascii=False)}
+    
     out = deepseek_chat([system, user], temperature=0.1)
-    return out or build_conclusion_text(summary)
+    if out:
+        return (out, "deepseek")
+    
+    out = perplexity_chat([system, user], temperature=0.2)
+    if out:
+        return (out, "perplexity")
+    
+    return (build_conclusion_text(summary), "local-fallback")
 
 def translate_to_zh(text: str) -> str | None:
     if not text: return None
@@ -871,41 +910,47 @@ def get_metrics():
 def peer_key_metrics_conclusion():
     """
     Input: { "primary": "...", "latest_quarter": {...}, "time_series": {...} }
-    Output: { "ticker": "...", "period": "...", "conclusion_en": "...", "conclusion_zh": "...|null", "llm": "deepseek|local-fallback" }
+    Output: { "ticker": "...", "period": "...", "conclusion_en": "...", "conclusion_zh": "...|null", "llm": "deepseek|perplexity|local-fallback" }
     """
+    payload = None
     try:
         payload = request.get_json(force=True, silent=False)
         summary = analyze_primary_company(payload)
-        en = llm_conclusion_with_deepseek(summary)  # DeepSeek phrasing
+        en, llm_used = llm_conclusion_with_deepseek(summary)
         zh = translate_to_zh(en) if en else None
+        
         return jsonify({
             "ticker": summary["primary"],
             "period": summary.get("period"),
-            "conclusion_en": en or build_conclusion_text(summary),
+            "conclusion_en": en,
             "conclusion_zh": zh or None,
-            "llm": "deepseek" if DEEPSEEK_API_KEY else "local-fallback"
+            "llm": llm_used
         })
     except Exception as e:
         # Deterministic fallback even on errors
-        try:
-            summary = analyze_primary_company(payload)
-            fallback = build_conclusion_text(summary)
-            return jsonify({
-                "ticker": summary.get("primary"),
-                "period": summary.get("period"),
-                "conclusion_en": fallback,
-                "conclusion_zh": None,
-                "llm": "local-fallback"
-            })
-        except Exception:
-            return jsonify({"error": str(e)}), 400
+        if payload:
+            try:
+                summary = analyze_primary_company(payload)
+                fallback = build_conclusion_text(summary)
+                return jsonify({
+                    "ticker": summary.get("primary"),
+                    "period": summary.get("period"),
+                    "conclusion_en": fallback,
+                    "conclusion_zh": None,
+                    "llm": "local-fallback"
+                })
+            except Exception:
+                pass
+        return jsonify({"error": str(e)}), 400
 
 @app.route('/api/health')
 def health():
     return jsonify({
         "status": "healthy",
         "deepseek_configured": bool(DEEPSEEK_API_KEY),
-        "deepseek_model": DEEPSEEK_MODEL if DEEPSEEK_API_KEY else None
+        "deepseek_model": DEEPSEEK_MODEL if DEEPSEEK_API_KEY else None,
+        "perplexity_configured": bool(PERPLEXITY_API_KEY),
+        "perplexity_model": PERPLEXITY_MODEL if PERPLEXITY_API_KEY else None
     })
 
 if __name__ == "__main__":
