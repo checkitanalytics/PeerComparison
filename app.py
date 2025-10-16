@@ -320,6 +320,15 @@ def calculate_metrics(ticker: str, max_retries: int = 3):
             _put("Net Income", net_income, False)
             if gm_pct is not None: _put("Gross Margin %", gm_pct, True)
             if fcf is not None:    _put("Free Cash Flow", fcf, False)
+            
+            # Add Market Cap as current value (not quarterly)
+            try:
+                profile = fetch_profile(t)
+                if profile.get("market_cap"):
+                    # Store market cap with "Current" key since it's not quarterly data
+                    out["Market Cap"] = {"Current": int(profile["market_cap"])}
+            except Exception:
+                pass
 
             return out if out.get("Total Revenue") or out.get("Gross Margin %") else None
         except Exception:
@@ -1062,7 +1071,7 @@ function renderCharts(){
 }
 
 function renderTable(){
-  const metrics = ['Total Revenue','Gross Margin %','Operating Expense','EBIT','Net Income','Free Cash Flow'];
+  const metrics = ['Market Cap','Total Revenue','Gross Margin %','Operating Expense','EBIT','Net Income','Free Cash Flow'];
   const tickerLatest = _tickers.map(t => {
     const rev = ((_metricsData[t]||{})['Total Revenue'])||{};
     const qs = Object.keys(rev).sort().reverse(); return qs[0] || (_quarters[0]||'N/A');
@@ -1073,7 +1082,9 @@ function renderTable(){
   metrics.forEach(metric=>{
     html += `<tr class="border-b border-gray-200"><td class="py-2 px-1 md:px-2 font-medium text-xs md:text-sm">${metric}</td>`;
     _tickers.forEach((t,i)=>{
-      const q = tickerLatest[i];
+      let q = tickerLatest[i];
+      // Market Cap uses "Current" key instead of quarter
+      if (metric === 'Market Cap') q = 'Current';
       const v = ((_metricsData[t]||{})[metric]||{})[q];
       const f = (v===undefined||v===null) ? 'N/A' : (metric==='Gross Margin %' ? Number(v).toFixed(1)+'%' : '$'+(Number(v)/1_000_000_000).toFixed(1)+'B');
       html += `<td class="text-right py-2 px-1 md:px-2">${f}</td>`;
@@ -1115,11 +1126,13 @@ function primaryLatestQuarter(){
 function buildConclusionPayload(){
   const primary = _tickers[0]; if(!primary){ return null; }
   const period = primaryLatestQuarter() || (_quarters[0]||null);
-  const metrics = ['Total Revenue','Gross Margin %','Operating Expense','EBIT','Net Income','Free Cash Flow'];
+  const metrics = ['Market Cap','Total Revenue','Gross Margin %','Operating Expense','EBIT','Net Income','Free Cash Flow'];
   const lq_rows = metrics.map(metric=>{
     const row={metric};
     _tickers.forEach(t=>{
-      const v = (((_metricsData[t]||{})[metric]||{})[period]);
+      // Market Cap uses "Current" key instead of quarter period
+      const key = metric === 'Market Cap' ? 'Current' : period;
+      const v = (((_metricsData[t]||{})[metric]||{})[key]);
       row[t] = (v===undefined ? null : v);
     });
     return row;
