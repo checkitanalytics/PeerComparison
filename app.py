@@ -1143,8 +1143,28 @@ function showLoading(b){ document.getElementById('loading').classList.toggle('hi
 function uniqUpper(arr){ const s=new Set(); const out=[]; for(const x of arr){ const y=(x||'').toUpperCase(); if(!s.has(y)){ s.add(y); out.push(y);} } return out; }
 
 // Initialize language buttons
-document.getElementById('btnEN').onclick = () => { _lang='en'; updateLangButtons(); applyTranslations(); renderConclusion(); };
-document.getElementById('btnZH').onclick = () => { _lang='zh'; updateLangButtons(); applyTranslations(); renderConclusion(); };
+document.getElementById('btnEN').onclick = () => { 
+  _lang='en'; 
+  updateLangButtons(); 
+  applyTranslations(); 
+  if (_tickers.length > 0) { 
+    displayPeers(_peerData); 
+    renderTable(); 
+    renderTimeSeriesTables(); 
+  }
+  renderConclusion(); 
+};
+document.getElementById('btnZH').onclick = () => { 
+  _lang='zh'; 
+  updateLangButtons(); 
+  applyTranslations(); 
+  if (_tickers.length > 0) { 
+    displayPeers(_peerData); 
+    renderTable(); 
+    renderTimeSeriesTables(); 
+  }
+  renderConclusion(); 
+};
 
 document.getElementById('tickerInput').addEventListener('keypress', e => { if (e.key==='Enter') resolveAndFind(); });
 document.getElementById('manualInput').addEventListener('keypress', e => { if (e.key==='Enter') addCompany(); });
