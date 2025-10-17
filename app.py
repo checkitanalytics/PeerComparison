@@ -648,6 +648,9 @@ def analyze_primary_company(payload: dict) -> dict:
             pass
         latest_vals[tkr] = {"MC/Rev": mc_rev, "MC/NI": mc_ni}
 
+    # Initialize peer_deltas dictionary
+    peer_deltas = {}  # metric -> [{peer:'XXX', pct:float} or {peer:'XXX', pp:float}]
+    
     # Add to peer_deltas with % diffs (primary vs each peer)
     peer_deltas["MC/Rev"] = []
     peer_deltas["MC/NI"]  = []
@@ -723,7 +726,7 @@ def analyze_primary_company(payload: dict) -> dict:
         except Exception:
             return None
 
-    peer_deltas = {}  # metric -> [{peer:'XXX', pct:float} or {peer:'XXX', pp:float}]
+    # Add regular metrics to peer_deltas (already initialized above)
     for metric, row in metric_row_map.items():
         primary_val = safe(row.get(primary))
         deltas = []
