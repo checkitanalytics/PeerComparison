@@ -166,6 +166,28 @@ EV_GROUP = [
 ]
 EV_TICKERS = {x["ticker"] for x in EV_GROUP}
 
+# --- Semiconductors (curated group) ---
+SEMICONDUCTORS_GROUP = [
+    {"ticker": "AMD",  "name": "Advanced Micro Devices, Inc."},
+    {"ticker": "INTC", "name": "Intel Corporation"},
+    {"ticker": "AVGO", "name": "Broadcom Inc."},
+    {"ticker": "NXPI", "name": "NXP Semiconductors N.V."},
+    {"ticker": "QCOM", "name": "QUALCOMM Incorporated"},
+    {"ticker": "MU",   "name": "Micron Technology, Inc."},
+    {"ticker": "ARM",  "name": "Arm Holdings plc"},
+    {"ticker": "TSM",  "name": "Taiwan Semiconductor Manufacturing Company Limited"},
+    {"ticker": "ASX",  "name": "ASE Technology Holding Co., Ltd."},
+    {"ticker": "NVDA", "name": "NVIDIA Corporation"},
+    {"ticker": "ASML", "name": "ASML Holding N.V."},
+    {"ticker": "ACMR", "name": "ACM Research, Inc."},
+    {"ticker": "ASYS", "name": "Amtech Systems, Inc."},
+    {"ticker": "MTSI", "name": "MACOM Technology Solutions Holdings, Inc."},
+    {"ticker": "ADI",  "name": "Analog Devices, Inc."},
+    {"ticker": "TXN",  "name": "Texas Instruments Incorporated"},
+]
+SEMICONDUCTORS_TICKERS = {x["ticker"] for x in SEMICONDUCTORS_GROUP}
+
+
 def _verify_ticker_with_yfinance(ticker: str) -> dict | None:
     try:
         t = _norm_ticker(ticker)
@@ -444,6 +466,15 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
     if base_ticker_norm in EV_TICKERS:
         peers = [p for p in EV_GROUP if p["ticker"] != base_ticker_norm][:peer_limit]
         return {"primary_company": base_ticker_norm, "industry": "Electric Vehicle Manufacturers", "peers": peers}
+        
+    if base_ticker_norm in SEMICONDUCTORS_TICKERS:
+        peers = [p for p in SEMICONDUCTORS_GROUP if p["ticker"] != base_ticker_norm][:peer_limit]
+        return {
+            "primary_company": base_ticker_norm,
+            "industry": "Semiconductors & Semiconductor Equipment",
+            "peers": peers
+        }
+
     
     # Standard peer selection logic
     _build_universe()
@@ -587,6 +618,103 @@ def analyze_primary_company(payload: dict) -> dict:
     fcf_rank  = metric_rank("Free Cash Flow")
     opex_rank = metric_rank("Operating Expense", higher_is_better=False)
 
+    # ---------- Valuation ratios (MC/Revenue, MC/Net Income) ----------
+    # Build a latest-period map per ticker for needed fields
+    period_key = period  # latest_quarter period, already computed above
+    tickers_all = [primary] + other_peers
+
+    def _get_latest(metric_name: str, tkr: str):
+        row = metric_row_map.get(metric_name)
+        if not row: return None
+        key = 'Current' if metric_name == 'Market Cap' else period_key
+        return row.get(tkr) if key is None else row.get(tkr)
+
+    latest_vals = {}
+    for tkr in tickers_all:
+        mc  = _get_latest("Market Cap", tkr)
+        rev = _get_latest("Total Revenue", tkr)
+        ni  = _get_latest("Net Income", tkr)
+        mc_rev = None
+        mc_ni  = None
+        try:
+            if mc is not None and rev not in (None, 0):
+                mc_rev = float(mc) / float(rev)
+        except Exception:
+            pass
+        try:
+            if mc is not None and ni not in (None, 0):
+                mc_ni = float(mc) / float(ni)
+        except Exception:
+            pass
+        latest_vals[tkr] = {"MC/Rev": mc_rev, "MC/NI": mc_ni}
+
+    # Add to peer_deltas with % diffs (primary vs each peer)
+    peer_deltas["MC/Rev"] = []
+    peer_deltas["MC/NI"]  = []
+    pv_mc_rev = latest_vals[primary]["MC/Rev"]
+    pv_mc_ni  = latest_vals[primary]["MC/NI"]
+    for peer in other_peers:
+        pr_mc_rev = latest_vals[peer]["MC/Rev"]
+        pr_mc_ni  = latest_vals[peer]["MC/NI"]
+        # percentage difference: (primary - peer) / |peer|
+        def _pct(a,b):
+            try:
+                if a is None or b in (None, 0): return None
+                return (a - b) / abs(b) * 100.0
+            except Exception:
+                return None
+        peer_deltas["MC/Rev"].append({"peer": peer, "pct": _pct(pv_mc_rev, pr_mc_rev)})
+        peer_deltas["MC/NI" ].append({"peer": peer, "pct": _pct(pv_mc_ni,  pr_mc_ni )})
+
+    # Make a quick median comparison for classification
+    def _median_clean(arr):
+        arr = [x for x in arr if x is not None]
+        return (stats.median(arr) if arr else None)
+
+    peers_mc_rev_vals = [latest_vals[p]["MC/Rev"] for p in other_peers]
+    peers_mc_ni_vals  = [latest_vals[p]["MC/NI"]  for p in other_peers]
+    med_mc_rev = _median_clean(peers_mc_rev_vals)
+    med_mc_ni  = _median_clean(peers_mc_ni_vals)
+
+    def _pct_vs_med(a, m):
+        try:
+            if a is None or m in (None, 0): return None
+            return (a - m) / abs(m) * 100.0
+        except Exception:
+            return None
+
+    mc_rev_vs_med = _pct_vs_med(pv_mc_rev, med_mc_rev)
+    mc_ni_vs_med  = _pct_vs_med(pv_mc_ni,  med_mc_ni)
+
+    # Simple rule: > +20% → Overvalued; < -20% → Undervalued; else Inline
+    def _classify(x):
+        if x is None: return None
+        if x > 20:  return "Overvalued"
+        if x < -20: return "Undervalued"
+        return "Inline"
+
+    valuation_label = None
+    # If both available, take the "harsher" label; else use whichever exists
+    lab1 = _classify(mc_rev_vs_med)
+    lab2 = _classify(mc_ni_vs_med)
+    if lab1 and lab2:
+        if "Overvalued" in (lab1, lab2): valuation_label = "Overvalued"
+        elif "Undervalued" in (lab1, lab2): valuation_label = "Undervalued"
+        else: valuation_label = "Inline"
+    else:
+        valuation_label = lab1 or lab2 or None
+
+    # Expose in summary for rendering later
+    summary_out_extras = {
+        "valuation_ratios": {
+            "primary": {"MC/Rev": pv_mc_rev, "MC/NI": pv_mc_ni},
+            "peers_median": {"MC/Rev": med_mc_rev, "MC/NI": med_mc_ni},
+            "pct_vs_median": {"MC/Rev": mc_rev_vs_med, "MC/NI": mc_ni_vs_med},
+            "label": valuation_label
+        }
+    }
+
+
     # ---------- NEW: percentage/pp deltas vs each peer ----------
     def pct_change(a, b):
         try:
@@ -674,14 +802,21 @@ def analyze_primary_company(payload: dict) -> dict:
         "fcf": latest_of(fcf_row),
     }
 
-    return {
-        "primary": primary, "period": period,
+    # -- everything above unchanged --
+
+    # Ensure this exists even if the valuation block didn't run
+    summary_out_extras = locals().get("summary_out_extras", {}) or {}
+
+    # Build once, then enrich with extras (valuation ratios, labels, etc.)
+    ret = {
+        "primary": primary,
+        "period": period,
         "peer_ranks": {
             "revenue_rank": rev_rank, "gross_margin_rank": gm_rank,
             "ebit_rank": ebit_rank, "net_income_rank": ni_rank,
             "fcf_rank": fcf_rank, "opex_rank": opex_rank
         },
-        "peer_deltas": peer_deltas,          # <-- NEW
+        "peer_deltas": peer_deltas,   # includes MC/Rev and MC/NI if you added that block
         "timeseries": {
             "quarters": quarters,
             "rev_qoq_pct": rev_qoq, "rev_yoy_pct": rev_yoy,
@@ -693,6 +828,11 @@ def analyze_primary_company(payload: dict) -> dict:
         },
         "latest": latest
     }
+
+    # Attach valuation ratios & verdict (if present)
+    ret.update(summary_out_extras)
+
+    return ret
 
 
 def build_conclusion_text(summary: dict) -> str:
@@ -734,7 +874,11 @@ def build_conclusion_text(summary: dict) -> str:
     bullets.append("  • " + peer_line("Net Income", label="Net income"))
     bullets.append("  • " + peer_line("Free Cash Flow", label="Free cash flow"))
     # (Add this line if you also want margin here)
-    # bullets.append("  • " + peer_line("Gross Margin %", label="GM (pp)", pp=True))
+    bullets.append("  • " + peer_line("Gross Margin %", label="GM (pp)", pp=True))
+    # Valuation ratios vs each peer (percentage diffs)
+    bullets.append("  • " + peer_line("MC/Rev", label="MC/Revenue"))
+    bullets.append("  • " + peer_line("MC/NI",  label="MC/Net income"))
+
 
     # ►► LATEST QUARTER METRICS — header with 5 sub-bullets
     bullets.append("\n- ►► LATEST QUARTER METRICS:")
@@ -777,6 +921,19 @@ def build_conclusion_text(summary: dict) -> str:
         bullets.append("  • Free cash flow: " + fmt_money_short(lt.get("fcf")) + tail)
     else:
         bullets.append("  • Free cash flow: n/a.")
+
+    # ►► VALUATION CHECK using medians of peers
+    vr = summary.get("valuation_ratios", {}) or {}
+    pct_vm = vr.get("pct_vs_median", {}) or {}
+    lab = vr.get("label")
+    def _fmt_pct(x): return "n/a" if x is None else f"{x:+.0f}%"
+    bullets.append(
+        "\n- ►► VALUATION CHECK: "
+        f"MC/Rev vs peer median {_fmt_pct(pct_vm.get('MC/Rev'))}; "
+        f"MC/NI {_fmt_pct(pct_vm.get('MC/NI'))}"
+        + (f" → {lab}." if lab else ".")
+    )
+
 
     # (Optional) Keep Gross Margin as a separate normal bullet if you still want it shown:
     # if any(ts.get(k) is not None for k in ("gm_qoq_pp","gm_yoy_pp")) or lt.get("gm") is not None:
