@@ -997,14 +997,14 @@ def index():
   <div class="bg-white rounded-lg shadow-xl p-3 md:p-5 mb-3">
     <div class="flex items-center justify-between mb-2">
       <h1 class="text-xl md:text-3xl font-bold text-gray-800" data-i18n="title">Peer Company Key Metrics Comparison</h1>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-1.5">
         <div class="inline-flex rounded-md shadow-sm">
-          <button id="btnEN" class="px-2 py-1 text-xs border rounded-l bg-indigo-600 text-white">EN</button>
-          <button id="btnZH" class="px-2 py-1 text-xs border rounded-r bg-white text-gray-700">中文</button>
+          <button id="btnEN" class="px-1.5 py-0.5 text-xs border rounded-l bg-indigo-600 text-white">EN</button>
+          <button id="btnZH" class="px-1.5 py-0.5 text-xs border rounded-r bg-white text-gray-700">中文</button>
         </div>
         <a href="https://equityresearch.checkitanalytics.com/" 
-           class="flex items-center justify-center w-10 h-10 md:w-12 md:h-12 bg-white border-2 border-gray-300 rounded-xl hover:bg-gray-50 transition-colors">
-          <svg class="w-5 h-5 md:w-6 md:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+           class="flex items-center justify-center w-7 h-7 md:w-8 md:h-8 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+          <svg class="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
           </svg>
         </a>
@@ -1343,11 +1343,11 @@ function renderAll(){
 
 function updateLangButtons(){
   document.getElementById('btnEN').className = _lang==='en'
-    ? "px-2 py-1 text-xs border rounded-l bg-indigo-600 text-white"
-    : "px-2 py-1 text-xs border rounded-l bg-white text-gray-700";
+    ? "px-1.5 py-0.5 text-xs border rounded-l bg-indigo-600 text-white"
+    : "px-1.5 py-0.5 text-xs border rounded-l bg-white text-gray-700";
   document.getElementById('btnZH').className = _lang==='zh'
-    ? "px-2 py-1 text-xs border rounded-r bg-indigo-600 text-white"
-    : "px-2 py-1 text-xs border rounded-r bg-white text-gray-700";
+    ? "px-1.5 py-0.5 text-xs border rounded-r bg-indigo-600 text-white"
+    : "px-1.5 py-0.5 text-xs border rounded-r bg-white text-gray-700";
 }
 
 function renderCharts(){
