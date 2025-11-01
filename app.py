@@ -134,6 +134,7 @@ MEGA7 = [
     {"ticker": "META", "name": "Meta Platforms, Inc."},
     {"ticker": "NVDA", "name": "NVIDIA Corporation"},
     {"ticker": "TSLA", "name": "Tesla, Inc."}
+    {"ticker": "AVGO", "name": "Broadcom, Inc."}
 ]
 MEGA7_TICKERS = {x["ticker"] for x in MEGA7}
 
@@ -162,7 +163,8 @@ EV_GROUP = [
     {"ticker": "PSNY", "name": "Polestar Automotive Holding UK PLC"},
     {"ticker": "BYDDY", "name": "BYD Company Limited"},
     {"ticker": "VFS", "name": "VinFast Auto Ltd."},
-    {"ticker": "WKHS", "name": "Workhorse Group Inc."}
+    {"ticker": "LOT", "name": "Lotus Technology Inc."}
+    {"ticker": "TSLA", "name": "Tesla, Inc."}
 ]
 EV_TICKERS = {x["ticker"] for x in EV_GROUP}
 
@@ -186,6 +188,18 @@ SEMICONDUCTORS_GROUP = [
     {"ticker": "TXN",  "name": "Texas Instruments Incorporated"},
 ]
 SEMICONDUCTORS_TICKERS = {x["ticker"] for x in SEMICONDUCTORS_GROUP}
+
+Fintech_GROUP = [
+    {"ticker": "V", "name": "Visa, Inc."},
+    {"ticker": "MA", "name": "Mastercard, Inc."},
+    {"ticker": "PYPL", "name": "PayPal Holdings, Inc."},
+    {"ticker": "COIN", "name": "Coinbase, Inc."},
+    {"ticker": "UPST", "name": "Upst"},
+    {"ticker": "LC", "name": "LendingClub Corporation"},
+    {"ticker": "SoFi", "name": "Sofi Technology"},
+    {"ticker": "AFRM", "name": "Affirm Holdings, Inc."},
+]
+EV_TICKERS = {x["ticker"] for x in EV_GROUP}
 
 
 def _verify_ticker_with_yfinance(ticker: str) -> dict | None:
