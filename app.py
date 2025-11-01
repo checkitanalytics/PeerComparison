@@ -133,7 +133,7 @@ MEGA7 = [
     {"ticker": "AMZN", "name": "Amazon.com, Inc."},
     {"ticker": "META", "name": "Meta Platforms, Inc."},
     {"ticker": "NVDA", "name": "NVIDIA Corporation"},
-    {"ticker": "TSLA", "name": "Tesla, Inc."}
+    {"ticker": "TSLA", "name": "Tesla, Inc."},
     {"ticker": "AVGO", "name": "Broadcom, Inc."}
 ]
 MEGA7_TICKERS = {x["ticker"] for x in MEGA7}
@@ -163,7 +163,7 @@ EV_GROUP = [
     {"ticker": "PSNY", "name": "Polestar Automotive Holding UK PLC"},
     {"ticker": "BYDDY", "name": "BYD Company Limited"},
     {"ticker": "VFS", "name": "VinFast Auto Ltd."},
-    {"ticker": "LOT", "name": "Lotus Technology Inc."}
+    {"ticker": "LOT", "name": "Lotus Technology Inc."},
     {"ticker": "TSLA", "name": "Tesla, Inc."}
 ]
 EV_TICKERS = {x["ticker"] for x in EV_GROUP}
