@@ -29,7 +29,7 @@ CORS(app)
 # -----------------------------
 DEEPSEEK_API_KEY  = os.environ.get("DEEPSEEK_API_KEY")
 DEEPSEEK_API_BASE = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
-DEEPSEEK_MODEL    = os.environ.get("DEEPSEEK_MODEL", "deepseek-v3.2-exp")
+DEEPSEEK_MODEL    = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
 # -----------------------------
 # Perplexity config (fallback)
