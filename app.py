@@ -1027,14 +1027,20 @@ def build_conclusion_text(summary: dict) -> str:
 
     # ►► VALUATION CHECK using medians of peers
     vr = summary.get("valuation_ratios", {}) or {}
+    primary_ratios = vr.get("primary", {}) or {}
+    peer_median = vr.get("peers_median", {}) or {}
     pct_vm = vr.get("pct_vs_median", {}) or {}
     lab = vr.get("label")
+    
+    def _fmt_ratio(x): return "n/a" if x is None else f"{x:.2f}"
     def _fmt_pct(x): return "n/a" if x is None else f"{x:+.0f}%"
+    
+    mc_rev_str = f"MC/Rev {_fmt_ratio(primary_ratios.get('MC/Rev'))} vs peer median {_fmt_ratio(peer_median.get('MC/Rev'))} ({_fmt_pct(pct_vm.get('MC/Rev'))})"
+    mc_ni_str = f"MC/NI {_fmt_ratio(primary_ratios.get('MC/NI'))} vs median {_fmt_ratio(peer_median.get('MC/NI'))} ({_fmt_pct(pct_vm.get('MC/NI'))})"
+    verdict_str = f" → {lab}" if lab else ""
+    
     bullets.append(
-        "\n- ►► VALUATION CHECK: "
-        f"MC/Rev vs peer median {_fmt_pct(pct_vm.get('MC/Rev'))}; "
-        f"MC/NI {_fmt_pct(pct_vm.get('MC/NI'))}"
-        + (f" → {lab}." if lab else ".")
+        f"\n- ►► VALUATION ANALYSIS: {mc_rev_str}; {mc_ni_str}{verdict_str}."
     )
 
 
@@ -1057,12 +1063,13 @@ def llm_conclusion_with_deepseek(summary: dict) -> tuple[str, str]:
     system = {"role":"system","content":"You are a finance analyst. Use ONLY numbers provided in the JSON. Be concise and factual."}
     user = {"role":"user","content": json.dumps({
         "task": "Write analyst-style past-performance summary for PRIMARY only.",
-        "style": "5-8 bullets; concise; numeric-first; avoid speculation.",
+        "style": "6-9 bullets; concise; numeric-first; avoid speculation.",
         "format": [
             "Start with '<TICKER>: Past-performance takeaway -- <period>.'",
             "Second bullet: 'Peer comparison (primary vs each peer): show percentage differences for Revenue, OpEx, EBIT, Net Income, Free Cash Flow and percentage-point (pp) differences for Gross Margin. Format example: Revenue vs META +12%, vs AMZN -5%; GM +1.6pp/+0.8pp; OpEx (lower better) -3%/-2%; EBIT ...'",
             "Include a bullet with latest-quarter actual values (Revenue, GM, EBIT, Net Income, FCF).",
             "Include growth/pp-delta bullets based on time-series if available.",
+            "IMPORTANT: Include a VALUATION bullet showing MC/Revenue and MC/Net Income ratios vs peer median with the verdict (Overvalued/Undervalued/Inline). Format: 'Valuation: MC/Rev [X.Xx] vs peer median [X.Xx] ([+/-]XX%); MC/NI [XX.X] vs median [XX.X] ([+/-]XX%) → [Overvalued/Undervalued/Inline].'",
             "Bullets start with '-' and keep each under ~200 characters."
         ],
         "data": summary
@@ -1180,7 +1187,13 @@ const translations = {
     netIncome: 'Net Income',
     freeCashFlow: 'Free Cash Flow',
     revenue: 'Revenue',
-    margin: 'Margin %'
+    margin: 'Margin %',
+    mcRevRatio: 'MC/Revenue',
+    mcNiRatio: 'MC/Net Income',
+    overvalued: 'Overvalued',
+    undervalued: 'Undervalued',
+    inline: 'Inline',
+    valuationAnalysis: 'Valuation Analysis'
   },
   zh: {
     title: '同行公司关键指标对比',
@@ -1211,7 +1224,13 @@ const translations = {
     netIncome: '净收入',
     freeCashFlow: '自由现金流',
     revenue: '收入',
-    margin: '利润率 %'
+    margin: '利润率 %',
+    mcRevRatio: '市值/收入',
+    mcNiRatio: '市值/净收入',
+    overvalued: '高估',
+    undervalued: '低估',
+    inline: '合理',
+    valuationAnalysis: '估值分析'
   }
 };
 
@@ -1527,7 +1546,7 @@ function renderCharts(){
 }
 
 function renderTable(){
-  const metrics = ['Market Cap','Total Revenue','Gross Margin %','Operating Expense','EBIT','Net Income','Free Cash Flow'];
+  const metrics = ['Market Cap','Total Revenue','Gross Margin %','Operating Expense','EBIT','Net Income','Free Cash Flow','MC/Revenue','MC/Net Income'];
   const metricLabels = {
     'Market Cap': t('marketCap'),
     'Total Revenue': t('totalRevenue'),
@@ -1535,7 +1554,9 @@ function renderTable(){
     'Operating Expense': t('operatingExpense'),
     'EBIT': t('ebit'),
     'Net Income': t('netIncome'),
-    'Free Cash Flow': t('freeCashFlow')
+    'Free Cash Flow': t('freeCashFlow'),
+    'MC/Revenue': t('mcRevRatio'),
+    'MC/Net Income': t('mcNiRatio')
   };
   const tickerLatest = _tickers.map(t => {
     const rev = ((_metricsData[t]||{})['Total Revenue'])||{};
@@ -1548,10 +1569,29 @@ function renderTable(){
     html += `<tr class="border-b border-gray-200"><td class="py-2 px-1 md:px-2 font-medium text-xs md:text-sm">${metricLabels[metric]}</td>`;
     _tickers.forEach((t,i)=>{
       let q = tickerLatest[i];
-      // Market Cap uses "Current" key instead of quarter
-      if (metric === 'Market Cap') q = 'Current';
-      const v = ((_metricsData[t]||{})[metric]||{})[q];
-      const f = (v===undefined||v===null) ? 'N/A' : (metric==='Gross Margin %' ? Number(v).toFixed(1)+'%' : '$'+(Number(v)/1_000_000_000).toFixed(1)+'B');
+      let f = 'N/A';
+      
+      if (metric === 'MC/Revenue' || metric === 'MC/Net Income') {
+        // Calculate ratios from existing data
+        const mc = ((_metricsData[t]||{})['Market Cap']||{})['Current'];
+        let denominator;
+        if (metric === 'MC/Revenue') {
+          denominator = ((_metricsData[t]||{})['Total Revenue']||{})[q];
+        } else {
+          denominator = ((_metricsData[t]||{})['Net Income']||{})[q];
+        }
+        if (mc && denominator && denominator !== 0) {
+          const ratio = mc / denominator;
+          f = ratio.toFixed(2);
+        }
+      } else {
+        // Standard metrics
+        if (metric === 'Market Cap') q = 'Current';
+        const v = ((_metricsData[t]||{})[metric]||{})[q];
+        if (v !== undefined && v !== null) {
+          f = (metric === 'Gross Margin %') ? Number(v).toFixed(1)+'%' : '$'+(Number(v)/1_000_000_000).toFixed(1)+'B';
+        }
+      }
       html += `<td class="text-right py-2 px-1 md:px-2">${f}</td>`;
     });
     html += '</tr>';
