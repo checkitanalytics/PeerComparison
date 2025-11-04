@@ -502,149 +502,135 @@ def _ratio_score(base_mc, mc):
     return abs((big / small) - 1.0)
 
 def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
-    """
-    Choose peers in this order of priority:
-      1️⃣ Self-defined groups (MEGA7, EVTOL, EV, SEMICONDUCTORS, FINTECH, AIRLINES, etc.)
-          ✅ Now supports multiple group membership
-      2️⃣ AI-defined group via industry match (DeepSeek semantic fallback)
-      3️⃣ If still insufficient → same sector
-      4️⃣ Final fallback → market cap similarity across universe
-    """
-    base_ticker_norm = _normalize_peer_ticker(base_ticker)
-    _build_universe()
-    base_prof = fetch_profile(base_ticker_norm)
-    base_ind = base_prof.get("industry")
-    base_sec = base_prof.get("sector")
-    base_mc  = base_prof.get("market_cap")
+        """
+        Fully supports multiple self-defined sector memberships.
+        Returns both:
+          • industry_list: list of all matching sector names
+          • industry: string joined by " / " for backward compatibility
+        """
+        base_ticker_norm = _normalize_peer_ticker(base_ticker)
+        _build_universe()
+        base_prof = fetch_profile(base_ticker_norm)
+        base_ind = base_prof.get("industry")
+        base_sec = base_prof.get("sector")
+        base_mc  = base_prof.get("market_cap")
 
-    # -----------------------------
-    # Step 1: Self-defined groups (multi-group support)
-    # -----------------------------
-    SELF_DEFINED_GROUPS = {
-        "Magnificent 7 Tech Giants": MEGA7_TICKERS,
-        "eVTOL / Urban Air Mobility": EVTOL_TICKERS,
-        "Electric Vehicle Manufacturers": EV_TICKERS,
-        "Semiconductors & Semiconductor Equipment": SEMICONDUCTORS_TICKERS,
-        "Fintech / Digital Payments": {x["ticker"] for x in Lending_GROUP} 
-                                      | {x["ticker"] for x in Payment_GROUP}
-                                      | {x["ticker"] for x in Broker_GROUP}
-                                      | {x["ticker"] for x in Banking_GROUP},
-        "Airlines & Aviation": {x["ticker"] for x in Airlines_GROUP},
-    }
-
-    matched_groups = []
-    combined_peers = []
-
-    for label, tickers in SELF_DEFINED_GROUPS.items():
-        if base_ticker_norm in tickers:
-            matched_groups.append(label)
-            # Collect peers from matching group
-            for group in [MEGA7, EVTOL_GROUP, EV_GROUP, SEMICONDUCTORS_GROUP,
-                          Lending_GROUP, Payment_GROUP, Broker_GROUP, Banking_GROUP, Airlines_GROUP]:
-                for g in group:
-                    if g["ticker"] != base_ticker_norm and g["ticker"] in tickers:
-                        combined_peers.append(g)
-
-    if matched_groups:
-        # Deduplicate peers by ticker
-        unique_peers = {p["ticker"]: p for p in combined_peers}.values()
-        return {
-            "primary_company": base_ticker_norm,
-            "industry": " / ".join(sorted(set(matched_groups))),
-            "peers": list(unique_peers)[:peer_limit]
+        # -----------------------------
+        # Step 1: Self-defined sector groups
+        # -----------------------------
+        SELF_DEFINED_GROUPS = {
+            "Magnificent 7 Tech Giants": MEGA7_TICKERS,
+            "eVTOL / Urban Air Mobility": EVTOL_TICKERS,
+            "Electric Vehicle Manufacturers": EV_TICKERS,
+            "Semiconductors & Semiconductor Equipment": SEMICONDUCTORS_TICKERS,
+            "Fintech / Digital Payments": {x["ticker"] for x in Lending_GROUP} 
+                                          | {x["ticker"] for x in Payment_GROUP}
+                                          | {x["ticker"] for x in Broker_GROUP}
+                                          | {x["ticker"] for x in Banking_GROUP},
+            "Airlines & Aviation": {x["ticker"] for x in Airlines_GROUP},
+            "Credit Services": {x["ticker"] for x in Banking_GROUP} 
+                               | {x["ticker"] for x in Lending_GROUP},
         }
 
-    # -----------------------------
-    # Step 2: AI-defined fallback
-    # -----------------------------
-    ai_peer_suggestion = None
-    try:
-        prompt = (
-            f"Suggest {peer_limit} U.S.-listed peer companies for {base_ticker_norm} "
-            f"based on similar business models or competitive landscape. "
-            "Return tickers only, comma-separated."
-        )
-        ai_text = deepseek_chat(
-            [{"role": "system", "content": "You are a financial analyst."},
-             {"role": "user", "content": prompt}],
-            temperature=0.2,
-            timeout=15
-        )
-        if ai_text:
-            tickers = [t.strip().upper() for t in ai_text.replace('\n', ',').split(',') if t.strip()]
-            ai_peer_suggestion = [t for t in tickers if t != base_ticker_norm]
-    except Exception:
-        ai_peer_suggestion = None
+        matched_groups = []
+        combined_peers = []
 
-    if ai_peer_suggestion:
-        peers = []
-        for t in ai_peer_suggestion:
-            v = _verify_ticker_with_yfinance(t)
-            if v:
-                peers.append(v)
-            if len(peers) >= peer_limit:
-                break
-        if peers:
+        for label, tickers in SELF_DEFINED_GROUPS.items():
+            if base_ticker_norm in tickers:
+                matched_groups.append(label)
+                for group in [MEGA7, EVTOL_GROUP, EV_GROUP, SEMICONDUCTORS_GROUP,
+                              Lending_GROUP, Payment_GROUP, Broker_GROUP, Banking_GROUP, Airlines_GROUP]:
+                    for g in group:
+                        if g["ticker"] != base_ticker_norm and g["ticker"] in tickers:
+                            combined_peers.append(g)
+
+        if matched_groups:
+            # Deduplicate peers
+            unique_peers = {p["ticker"]: p for p in combined_peers}.values()
             return {
                 "primary_company": base_ticker_norm,
-                "industry": base_ind or base_sec or "AI-suggested peers",
-                "peers": peers
+                "industry": " / ".join(sorted(set(matched_groups))),
+                "industry_list": sorted(set(matched_groups)),
+                "peers": list(unique_peers)[:peer_limit]
             }
 
-    # -----------------------------
-    # Step 3: Same industry peers
-    # -----------------------------
-    peers = []
-    for t in _UNIVERSE:
-        if t == base_ticker_norm:
-            continue
-        pr = fetch_profile(t)
-        if base_ind and pr.get("industry") == base_ind:
-            peers.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
-    peers.sort(key=lambda x: x[1])
-    peers_named = [{"ticker": t, "name": fetch_profile(t).get("name")} for t, _ in peers[:peer_limit]]
-    if peers_named:
+        # -----------------------------
+        # Step 2+: same as before (AI fallback / industry / sector / market cap)
+        # -----------------------------
+        ai_peer_suggestion = None
+        try:
+            prompt = (
+                f"Suggest {peer_limit} U.S.-listed peer companies for {base_ticker_norm} "
+                f"based on similar business models or competitive landscape. "
+                "Return tickers only, comma-separated."
+            )
+            ai_text = deepseek_chat(
+                [{"role": "system", "content": "You are a financial analyst."},
+                 {"role": "user", "content": prompt}],
+                temperature=0.2,
+                timeout=15
+            )
+            if ai_text:
+                tickers = [t.strip().upper() for t in ai_text.replace('\n', ',').split(',') if t.strip()]
+                ai_peer_suggestion = [t for t in tickers if t != base_ticker_norm]
+        except Exception:
+            ai_peer_suggestion = None
+
+        if ai_peer_suggestion:
+            peers = []
+            for t in ai_peer_suggestion:
+                v = _verify_ticker_with_yfinance(t)
+                if v:
+                    peers.append(v)
+                if len(peers) >= peer_limit:
+                    break
+            if peers:
+                return {
+                    "primary_company": base_ticker_norm,
+                    "industry": base_ind or base_sec or "AI-suggested peers",
+                    "industry_list": [base_ind or base_sec or "AI-suggested peers"],
+                    "peers": peers
+                }
+
+        # Standard fallback (industry → sector → market cap)
+        def _fallback(level_name, selector):
+            peers = []
+            for t in _UNIVERSE:
+                if t == base_ticker_norm:
+                    continue
+                pr = fetch_profile(t)
+                if selector(pr):
+                    peers.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
+            peers.sort(key=lambda x: x[1])
+            peers_named = [{"ticker": t, "name": fetch_profile(t).get("name")} for t, _ in peers[:peer_limit]]
+            return peers_named
+
+        peers_named = _fallback("industry", lambda pr: pr.get("industry") == base_ind)
+        if peers_named:
+            return {
+                "primary_company": base_ticker_norm,
+                "industry": base_ind or "Same industry",
+                "industry_list": [base_ind or "Same industry"],
+                "peers": peers_named
+            }
+
+        peers_named = _fallback("sector", lambda pr: pr.get("sector") == base_sec)
+        if peers_named:
+            return {
+                "primary_company": base_ticker_norm,
+                "industry": base_sec or "Same sector",
+                "industry_list": [base_sec or "Same sector"],
+                "peers": peers_named
+            }
+
+        peers_named = _fallback("market cap", lambda pr: True)
         return {
             "primary_company": base_ticker_norm,
-            "industry": base_ind or "Same industry",
+            "industry": base_ind or base_sec or "Market Cap Similarity",
+            "industry_list": [base_ind or base_sec or "Market Cap Similarity"],
             "peers": peers_named
         }
 
-    # -----------------------------
-    # Step 4: Same sector peers
-    # -----------------------------
-    peers = []
-    for t in _UNIVERSE:
-        if t == base_ticker_norm:
-            continue
-        pr = fetch_profile(t)
-        if base_sec and pr.get("sector") == base_sec:
-            peers.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
-    peers.sort(key=lambda x: x[1])
-    peers_named = [{"ticker": t, "name": fetch_profile(t).get("name")} for t, _ in peers[:peer_limit]]
-    if peers_named:
-        return {
-            "primary_company": base_ticker_norm,
-            "industry": base_sec or "Same sector",
-            "peers": peers_named
-        }
-
-    # -----------------------------
-    # Step 5: Market cap fallback
-    # -----------------------------
-    allc = []
-    for t in _UNIVERSE:
-        if t == base_ticker_norm:
-            continue
-        pr = fetch_profile(t)
-        allc.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
-    allc.sort(key=lambda x: x[1])
-    peers_named = [{"ticker": t, "name": fetch_profile(t).get("name")} for t, _ in allc[:peer_limit]]
-    return {
-        "primary_company": base_ticker_norm,
-        "industry": base_ind or base_sec or "Market Cap Similarity",
-        "peers": peers_named
-    }
 
 # ============================================================
 # Analysis math + DeepSeek phrasing
@@ -1324,25 +1310,85 @@ async function findPeers(ticker, name){
   }catch(e){ showError(e.message); } finally{ showLoading(false); }
 }
 
-function displayPeers(d){
-  const primaryLabel = d.primary_name ? d.primary_company + ' - ' + d.primary_name : d.primary_company;
+function displayPeers(d) {
+  const primaryLabel = d.primary_name
+    ? d.primary_company + ' - ' + d.primary_name
+    : d.primary_company;
   const allPeers = [...d.peers, ..._manualPeers];
-  const html = `<h2 class="text-lg md:text-2xl font-semibold text-gray-800 mb-3">${t('peerCompaniesIn')} ${d.industry}</h2>
+
+  // ✅ Safe fallback for industry list
+  const industries = d.industry_list || (d.industry ? d.industry.split(" / ") : []);
+
+  // ✅ Build sector color tags
+  const tagsHtml = industries.map((i, idx) => {
+    const colors = {
+      "Magnificent 7 Tech Giants": "bg-purple-100 text-purple-700",
+      "eVTOL / Urban Air Mobility": "bg-pink-100 text-pink-700",
+      "Electric Vehicle Manufacturers": "bg-green-100 text-green-700",
+      "Semiconductors & Semiconductor Equipment": "bg-orange-100 text-orange-700",
+      "Fintech / Digital Payments": "bg-teal-100 text-teal-700",
+      "Airlines & Aviation": "bg-sky-100 text-sky-700",
+      "Banking": "bg-blue-100 text-blue-700",
+      "Credit Services": "bg-indigo-100 text-indigo-700"
+    };
+    const style = colors[i] || "bg-gray-100 text-gray-700";
+    return `<span key="${idx}" class="inline-block ${style} px-2 py-1 rounded-md mr-1 mb-1">${i}</span>`;
+  }).join(" ");
+
+  const html = `
+    <h2 class="text-lg font-semibold mb-2">
+      ${t('peerCompaniesIn')}&nbsp;${tagsHtml}
+    </h2>
+
     <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-      <div class="bg-white p-3 rounded-lg shadow"><div class="text-xs text-gray-600 mb-1">${t('primary')}</div>
-      <div class="text-base md:text-xl font-bold text-indigo-600 break-words">${primaryLabel}</div></div>
-      ${allPeers.map((p,i)=>`<div class="bg-white p-3 rounded-lg shadow"><div class="text-xs text-gray-600 mb-1">${t('peer')} ${i+1}</div>
-      <div class="text-base md:text-xl font-bold text-gray-800">${p.ticker}</div><div class="text-xs text-gray-600 truncate">${p.name||''}</div></div>`).join('')}
+      <div class="bg-white p-3 rounded-lg shadow">
+        <div class="text-xs text-gray-600 mb-1">${t('primary')}</div>
+        <div class="text-base md:text-xl font-bold text-indigo-600 break-words">${primaryLabel}</div>
+      </div>
+      ${allPeers.map((p,i)=>`
+        <div class="bg-white p-3 rounded-lg shadow">
+          <div class="text-xs text-gray-600 mb-1">${t('peer')} ${i+1}</div>
+          <div class="text-base md:text-xl font-bold text-gray-800">${p.ticker}</div>
+          <div class="text-xs text-gray-600 truncate">${p.name||''}</div>
+        </div>
+      `).join('')}
     </div>`;
-  document.getElementById('peerInfo').innerHTML = html;
-  document.getElementById('peerInfo').classList.remove('hidden');
-  
+
+  const peerInfo = document.getElementById('peerInfo');
+  peerInfo.innerHTML = html;
+  peerInfo.classList.remove('hidden');
+
   // Disable remove button if no peers available
   const removeButton = document.getElementById('removeButton');
   removeButton.disabled = allPeers.length === 0;
   removeButton.classList.toggle('opacity-50', allPeers.length === 0);
   removeButton.classList.toggle('cursor-not-allowed', allPeers.length === 0);
 }
+
+// ✅ make it globally visible before window.onload
+window.displayPeers = displayPeers;
+
+window.onload = function() {
+  // --- move all event bindings inside this block ---
+  document.getElementById('btnEN').onclick = () => { 
+    _lang='en'; updateLangButtons(); applyTranslations();
+    if (_tickers.length > 0) { displayPeers(_peerData); renderTable(); renderTimeSeriesTables(); }
+    renderConclusion();
+  };
+  document.getElementById('btnZH').onclick = () => { 
+    _lang='zh'; updateLangButtons(); applyTranslations();
+    if (_tickers.length > 0) { displayPeers(_peerData); renderTable(); renderTimeSeriesTables(); }
+    renderConclusion();
+  };
+  document.getElementById('tickerInput').addEventListener('keypress', e => { if (e.key==='Enter') resolveAndFind(); });
+  document.getElementById('manualInput').addEventListener('keypress', e => { if (e.key==='Enter') addCompany(); });
+  document.getElementById('findButton').onclick = resolveAndFind;
+  document.getElementById('addButton').onclick  = addCompany;
+  document.getElementById('removeButton').onclick = removeCompany;
+
+  applyTranslations(); // initial translation
+};
+
 
 async function addCompany(){
   const raw = document.getElementById('manualInput').value.trim();
