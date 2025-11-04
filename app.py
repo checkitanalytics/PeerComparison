@@ -201,6 +201,17 @@ Fintech_GROUP = [
 ]
 EV_TICKERS = {x["ticker"] for x in EV_GROUP}
 
+Airlines_GROUP = [
+    {"ticker": "AAL", "name": "American Airlines"},
+    {"ticker": "DAL", "name": "Delta Air Lines"},
+    {"ticker": "LUV", "name": "Southwest Airlines"},
+    {"ticker": "UAL", "name": "United Airlines"},
+    {"ticker": "ULCC", "name": "Frontier Group Holdings"},
+    {"ticker": "ALK", "name": "Alaska Air"},
+    {"ticker": "FLYY", "name": "Spirit Aviation"},
+    {"ticker": "SNCY", "name": "Sun Country Airlines"},
+]
+EV_TICKERS = {x["ticker"] for x in Airlines_GROUP}
 
 def _verify_ticker_with_yfinance(ticker: str) -> dict | None:
     try:
@@ -460,91 +471,138 @@ def _ratio_score(base_mc, mc):
 
 def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
     """
-    Choose peers from specialty groups or broad universe:
-      0) Check if ticker is in MEGA7, EVTOL_GROUP, or EV_GROUP → return group peers
-      1) Try SAME INDUSTRY → closest market cap
-      2) If insufficient, use SAME SECTOR → closest market cap
-      3) If still insufficient, pick any tickers closest in market cap
+    Choose peers in this order of priority:
+      1️⃣ Self-defined groups (MEGA7, EVTOL, EV, SEMICONDUCTORS, FINTECH, AIRLINES, etc.)
+      2️⃣ AI-defined group via industry match (DeepSeek semantic fallback)
+      3️⃣ If still insufficient → same sector
+      4️⃣ Final fallback → market cap similarity across universe
     """
     base_ticker_norm = _normalize_peer_ticker(base_ticker)
-    
-    # 0) Check specialty groups first
-    if base_ticker_norm in MEGA7_TICKERS:
-        peers = [p for p in MEGA7 if p["ticker"] != base_ticker_norm][:peer_limit]
-        return {"primary_company": base_ticker_norm, "industry": "Magnificent 7 Tech Giants", "peers": peers}
-    
-    if base_ticker_norm in EVTOL_TICKERS:
-        peers = [p for p in EVTOL_GROUP if p["ticker"] != base_ticker_norm][:peer_limit]
-        return {"primary_company": base_ticker_norm, "industry": "eVTOL / Urban Air Mobility", "peers": peers}
-    
-    if base_ticker_norm in EV_TICKERS:
-        peers = [p for p in EV_GROUP if p["ticker"] != base_ticker_norm][:peer_limit]
-        return {"primary_company": base_ticker_norm, "industry": "Electric Vehicle Manufacturers", "peers": peers}
-        
-    if base_ticker_norm in SEMICONDUCTORS_TICKERS:
-        peers = [p for p in SEMICONDUCTORS_GROUP if p["ticker"] != base_ticker_norm][:peer_limit]
-        return {
-            "primary_company": base_ticker_norm,
-            "industry": "Semiconductors & Semiconductor Equipment",
-            "peers": peers
-        }
-
-    
-    # Standard peer selection logic
     _build_universe()
     base_prof = fetch_profile(base_ticker_norm)
-    base_ind, base_sector, base_mc = base_prof.get("industry"), base_prof.get("sector"), base_prof.get("market_cap")
+    base_ind = base_prof.get("industry")
+    base_sec = base_prof.get("sector")
+    base_mc  = base_prof.get("market_cap")
 
-    # Track already selected peers to avoid duplicates
-    selected_tickers = set()
+    # -----------------------------
+    # Step 1: Self-defined groups
+    # -----------------------------
+    SELF_DEFINED_GROUPS = {
+        "Magnificent 7 Tech Giants": MEGA7_TICKERS,
+        "eVTOL / Urban Air Mobility": EVTOL_TICKERS,
+        "Electric Vehicle Manufacturers": EV_TICKERS,
+        "Semiconductors & Semiconductor Equipment": SEMICONDUCTORS_TICKERS,
+        "Fintech / Digital Payments": {x["ticker"] for x in Fintech_GROUP},
+        "Airlines & Aviation": {x["ticker"] for x in Airlines_GROUP},
+    }
+
+    for label, tickers in SELF_DEFINED_GROUPS.items():
+        if base_ticker_norm in tickers:
+            group_list = []
+            # fetch ticker + name pairs from that group
+            for group in [MEGA7, EVTOL_GROUP, EV_GROUP, SEMICONDUCTORS_GROUP, Fintech_GROUP, Airlines_GROUP]:
+                for g in group:
+                    if g["ticker"] != base_ticker_norm and g["ticker"] in tickers:
+                        group_list.append(g)
+            return {
+                "primary_company": base_ticker_norm,
+                "industry": label,
+                "peers": group_list[:peer_limit]
+            }
+
+    # -----------------------------
+    # Step 2: AI-defined industry fallback
+    # -----------------------------
+    ai_peer_suggestion = None
+    try:
+        prompt = (
+            f"Suggest {peer_limit} U.S.-listed peer companies for {base_ticker_norm} "
+            f"based on similar business models or competitive landscape. "
+            "Return tickers only, comma-separated."
+        )
+        ai_text = deepseek_chat(
+            [{"role": "system", "content": "You are a financial analyst."},
+             {"role": "user", "content": prompt}],
+            temperature=0.2,
+            timeout=15
+        )
+        if ai_text:
+            tickers = [t.strip().upper() for t in ai_text.replace('\n', ',').split(',') if t.strip()]
+            ai_peer_suggestion = [t for t in tickers if t != base_ticker_norm]
+    except Exception:
+        ai_peer_suggestion = None
+
+    if ai_peer_suggestion:
+        peers = []
+        for t in ai_peer_suggestion:
+            v = _verify_ticker_with_yfinance(t)
+            if v:
+                peers.append(v)
+            if len(peers) >= peer_limit:
+                break
+        if peers:
+            return {
+                "primary_company": base_ticker_norm,
+                "industry": base_ind or base_sec or "AI-suggested peers",
+                "peers": peers
+            }
+
+    # -----------------------------
+    # Step 3: Same industry peers
+    # -----------------------------
+    selected = set()
     peers = []
-    
-    # 1) Same industry
-    same_ind = []
     for t in _UNIVERSE:
-        if t == base_prof["ticker"]: continue
+        if t == base_ticker_norm:
+            continue
         pr = fetch_profile(t)
-        if base_ind and pr.get("industry") and pr["industry"] == base_ind:
-            same_ind.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
-    same_ind.sort(key=lambda x: x[1])
-    for t, _ in same_ind:
-        if len(peers) >= peer_limit: break
-        if t not in selected_tickers:
-            peers.append({"ticker": t})
-            selected_tickers.add(t)
+        if base_ind and pr.get("industry") == base_ind:
+            peers.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
+    peers.sort(key=lambda x: x[1])
+    peers_named = [{"ticker": t, "name": fetch_profile(t).get("name")} for t, _ in peers[:peer_limit]]
+    if peers_named:
+        return {
+            "primary_company": base_ticker_norm,
+            "industry": base_ind or "Same industry",
+            "peers": peers_named
+        }
 
-    # 2) Fallback: same sector
-    if len(peers) < peer_limit:
-        same_sec = []
-        for t in _UNIVERSE:
-            if t == base_prof["ticker"] or t in selected_tickers: continue
-            pr = fetch_profile(t)
-            if base_sector and pr.get("sector") and pr["sector"] == base_sector:
-                same_sec.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
-        same_sec.sort(key=lambda x: x[1])
-        for t, _ in same_sec:
-            if len(peers) >= peer_limit: break
-            if t not in selected_tickers:
-                peers.append({"ticker": t})
-                selected_tickers.add(t)
+    # -----------------------------
+    # Step 4: Same sector peers
+    # -----------------------------
+    peers = []
+    for t in _UNIVERSE:
+        if t == base_ticker_norm:
+            continue
+        pr = fetch_profile(t)
+        if base_sec and pr.get("sector") == base_sec:
+            peers.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
+    peers.sort(key=lambda x: x[1])
+    peers_named = [{"ticker": t, "name": fetch_profile(t).get("name")} for t, _ in peers[:peer_limit]]
+    if peers_named:
+        return {
+            "primary_company": base_ticker_norm,
+            "industry": base_sec or "Same sector",
+            "peers": peers_named
+        }
 
-    # 3) Fallback: any closest market cap
-    if len(peers) < peer_limit:
-        anyc = []
-        for t in _UNIVERSE:
-            if t == base_prof["ticker"] or t in selected_tickers: continue
-            pr = fetch_profile(t)
-            anyc.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
-        anyc.sort(key=lambda x: x[1])
-        for t, _ in anyc:
-            if len(peers) >= peer_limit: break
-            if t not in selected_tickers:
-                peers.append({"ticker": t})
-                selected_tickers.add(t)
+    # -----------------------------
+    # Step 5: Market cap similarity fallback
+    # -----------------------------
+    allc = []
+    for t in _UNIVERSE:
+        if t == base_ticker_norm:
+            continue
+        pr = fetch_profile(t)
+        allc.append((t, _ratio_score(base_mc, pr.get("market_cap"))))
+    allc.sort(key=lambda x: x[1])
+    peers_named = [{"ticker": t, "name": fetch_profile(t).get("name")} for t, _ in allc[:peer_limit]]
+    return {
+        "primary_company": base_ticker_norm,
+        "industry": base_ind or base_sec or "Market Cap Similarity",
+        "peers": peers_named
+    }
 
-    # Attach names
-    peers_named = [{"ticker": p["ticker"], "name": fetch_profile(p["ticker"]).get("name")} for p in peers[:peer_limit]]
-    return {"primary_company": base_prof["ticker"], "industry": base_ind or (base_sector or "N/A"), "peers": peers_named}
 
 # ============================================================
 # Analysis math + DeepSeek phrasing
