@@ -122,9 +122,6 @@ def _normalize_peer_ticker(t: str) -> str:
     u = (t or "").upper().strip()
     return PEER_TICKER_ALIAS.get(u, u)
 
-def _norm_ticker(t: str) -> str:
-    """Alias for backward compatibility"""
-    return _normalize_peer_ticker(t)
 
 MEGA7 = [
     {"ticker": "AAPL", "name": "Apple Inc."},
@@ -245,39 +242,202 @@ Airlines_GROUP = [
 ]
 Airlines_TICKERS = {x["ticker"] for x in Airlines_GROUP}
 
+# ============================================================
+# Ticker resolve (with S3 mapping + Perplexity fallback)
+# ============================================================
+import boto3
+from botocore.exceptions import ClientError
+
+# ------------------------------------------------------------
+# 1️⃣  S3 Config
+# ------------------------------------------------------------
+BUCKET_NAME = "checkitanalytics"
+TICKER_MAP_KEY = "tickers/ccm_link.xlsx"
+
+s3_client = boto3.client("s3")
+
+# ------------------------------------------------------------
+# 2️⃣  Load mapping from S3 once and cache
+# ------------------------------------------------------------
+@lru_cache(maxsize=1)
+def load_s3_ticker_map() -> dict:
+    """
+    Loads pre-stored Excel sheet mapping of company names ↔ tickers.
+    Expected columns: 'Ticker', 'Company'
+    Returns dict: {lowercase company name: ticker}
+    """
+    import io
+    try:
+        obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=TICKER_MAP_KEY)
+        df = pd.read_excel(io.BytesIO(obj["Body"].read()))
+        cols = [c.lower() for c in df.columns]
+        if "ticker" not in cols or "company" not in cols:
+            raise ValueError("Mapping sheet must contain 'Ticker' and 'Company' columns")
+        df.columns = cols
+        mapping = {}
+        for _, r in df.iterrows():
+            name = str(r.get("company", "")).strip().lower()
+            tick = str(r.get("ticker", "")).strip().upper()
+            if name and tick:
+                mapping[name] = tick
+        print(f"[INFO] Loaded {len(mapping)} tickers from S3 mapping sheet.")
+        return mapping
+    except ClientError as e:
+        print(f"[WARN] Could not load ticker map from S3: {e}")
+        return {}
+    except Exception as e:
+        print(f"[WARN] Error parsing ticker map: {e}")
+        return {}
+
+# ------------------------------------------------------------
+# 3️⃣  Static fallback map (for most common tickers)
+# ------------------------------------------------------------
+COMMON_NAME_MAP_FALLBACK = {
+    "tesla": "TSLA", "apple": "AAPL", "microsoft": "MSFT", "amazon": "AMZN",
+    "google": "GOOGL", "alphabet": "GOOGL", "meta": "META", "facebook": "META",
+    "nvidia": "NVDA", "netflix": "NFLX", "boeing": "BA", "airbus": "AIR.PA"
+}
+
+# ------------------------------------------------------------
+# 4️⃣  Peer alias (unchanged)
+# ------------------------------------------------------------
+PEER_TICKER_ALIAS = {"GOOG": "GOOGL", "FB": "META", "SRTA": "BLDE", "BLADE": "BLDE"}
+
+def _normalize_peer_ticker(t: str) -> str:
+    u = (t or "").upper().strip()
+    return PEER_TICKER_ALIAS.get(u, u)
+
+_norm_ticker = _normalize_peer_ticker  # backward compat
+
+# ------------------------------------------------------------
+# 5️⃣  yfinance verification
+# ------------------------------------------------------------
 def _verify_ticker_with_yfinance(ticker: str) -> dict | None:
     try:
         t = _norm_ticker(ticker)
-        s = yf.Ticker(t); _ensure_yf_session_headers(s)
+        s = yf.Ticker(t)
+        _ensure_yf_session_headers(s)
         info = s.get_info() or {}
         nm = info.get("longName") or info.get("shortName")
-        if nm: return {"ticker": t, "name": nm}
-        if info.get("symbol") == t: return {"ticker": t, "name": None}
+        if nm:
+            return {"ticker": t, "name": nm}
+        if info.get("symbol") == t:
+            return {"ticker": t, "name": None}
         return None
     except Exception:
         return None
 
+# ------------------------------------------------------------
+# 6️⃣  Perplexity fallback for unknown inputs
+# ------------------------------------------------------------
+def perplexity_lookup_company(input_text: str) -> dict | None:
+    """
+    Use Perplexity API to infer the correct ticker for a given company name.
+    Example: "Palantir Technologies" -> "PLTR"
+    """
+    if not PERPLEXITY_API_KEY:
+        return None
+    try:
+        query = f"What is the stock ticker for {input_text} (U.S. or HK/China company if listed)? Return only the ticker symbol."
+        r = requests.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={
+                "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": PERPLEXITY_MODEL,
+                "temperature": 0.1,
+                "messages": [
+                    {"role": "system", "content": "You are a financial market assistant."},
+                    {"role": "user", "content": query}
+                ],
+                "top_p": 0.9,
+                "stream": False
+            },
+            timeout=25
+        )
+        r.raise_for_status()
+        if r.status_code != 200:
+            print(f"[WARN] Perplexity returned non-200: {r.status_code}")
+            return None
+
+        data = r.json()
+        content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+        if not content:
+            return None
+        # extract possible ticker symbols like TSLA, AAPL, BABA
+        import re
+        m = re.findall(r"\b[A-Z]{1,6}\b", content)
+        if not m:
+            return None
+        ticker = m[0]
+        v = _verify_ticker_with_yfinance(ticker)
+        if v:
+            v["source"] = "perplexity"
+            return v
+        return {"ticker": ticker, "name": None, "source": "perplexity"}
+    except Exception as e:
+        print(f"[WARN] Perplexity fallback failed: {e}")
+        return None
+
+# ------------------------------------------------------------
+# 7️⃣  Main resolver (combines all layers)
+# ------------------------------------------------------------
 def resolve_input_to_ticker(user_input: str) -> dict:
+    """
+    Accepts ticker OR company name, returns {ticker, name, source}.
+    Priority:
+      1. Direct ticker (AAPL, TSLA)
+      2. S3 mapping (exact or partial company name)
+      3. Static fallback map
+      4. Perplexity AI fallback
+      5. yfinance heuristic verification
+    """
     raw = (user_input or "").strip()
     if not raw:
-        return {"error":"Input is empty"}
+        return {"error": "Input is empty"}
 
-    # Try direct ticker first
+    # Step 1: direct ticker
     if raw.isalpha() and 1 <= len(raw) <= 6:
         v = _verify_ticker_with_yfinance(raw)
-        if v: return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "input"}
+        if v:
+            return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "input"}
 
-    # Try common names
+    # Step 2: S3 mapping
+    mapping = load_s3_ticker_map()
     norm = raw.lower()
-    if norm in COMMON_NAME_MAP:
-        v = _verify_ticker_with_yfinance(COMMON_NAME_MAP[norm])
-        if v: return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "common"}
+    if norm in mapping:
+        tkr = mapping[norm]
+        v = _verify_ticker_with_yfinance(tkr)
+        if v:
+            return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "s3-map"}
+    # partial match
+    for cname, tkr in mapping.items():
+        if norm in cname:
+            v = _verify_ticker_with_yfinance(tkr)
+            if v:
+                return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "s3-partial"}
 
-    # Last: treat as ticker again
+    # Step 3: static fallback
+    if norm in COMMON_NAME_MAP_FALLBACK:
+        tkr = COMMON_NAME_MAP_FALLBACK[norm]
+        v = _verify_ticker_with_yfinance(tkr)
+        if v:
+            return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "fallback"}
+
+    # Step 4: Perplexity fallback
+    v = perplexity_lookup_company(raw)
+    if v:
+        return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "perplexity"}
+
+    # Step 5: yfinance heuristic
     v = _verify_ticker_with_yfinance(raw)
-    if v: return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "guess"}
+    if v:
+        return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "guess"}
 
     return {"error": f"Could not resolve '{raw}' to a ticker"}
+
 
 # ============================================================
 # Profiles & metrics
