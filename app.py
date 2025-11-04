@@ -185,21 +185,53 @@ SEMICONDUCTORS_GROUP = [
     {"ticker": "ASYS", "name": "Amtech Systems, Inc."},
     {"ticker": "MTSI", "name": "MACOM Technology Solutions Holdings, Inc."},
     {"ticker": "ADI",  "name": "Analog Devices, Inc."},
-    {"ticker": "TXN",  "name": "Texas Instruments Incorporated"},
+    {"ticker": "TXN",  "name": "Texas Instruments Incorporated"}
 ]
 SEMICONDUCTORS_TICKERS = {x["ticker"] for x in SEMICONDUCTORS_GROUP}
 
-Fintech_GROUP = [
+Payment_GROUP = [
     {"ticker": "V", "name": "Visa, Inc."},
     {"ticker": "MA", "name": "Mastercard, Inc."},
     {"ticker": "PYPL", "name": "PayPal Holdings, Inc."},
-    {"ticker": "COIN", "name": "Coinbase, Inc."},
+    {"ticker": "AXP", "name": "American Express"},
+    {"ticker": "XYZ", "name": "Block"},
+    {"ticker": "COF", "name": "Capital One Financial"},
+    {"ticker": "STNE", "name": "StoneCo"}
+]
+Payment_TICKERS = {x["ticker"] for x in Payment_GROUP}
+
+Lending_GROUP = [
+    {"ticker": "CHYM", "name": "Chime Financial"},
+    {"ticker": "KLAR", "name": "Klarna Group"},
+    {"ticker": "PYPL", "name": "PayPal Holdings, Inc."},
     {"ticker": "UPST", "name": "Upst"},
     {"ticker": "LC", "name": "LendingClub Corporation"},
     {"ticker": "SoFi", "name": "Sofi Technology"},
-    {"ticker": "AFRM", "name": "Affirm Holdings, Inc."},
+    {"ticker": "AFRM", "name": "Affirm Holdings, Inc."}
 ]
-EV_TICKERS = {x["ticker"] for x in EV_GROUP}
+Lending_TICKERS = {x["ticker"] for x in Lending_GROUP}
+
+Broker_GROUP = [
+    {"ticker": "HOOD", "name": "Robinhood Markets"},
+    {"ticker": "FUTU", "name": "Futu"},
+    {"ticker": "IBKR", "name": "Interactive Brokers Group"},
+    {"ticker": "COIN", "name": "Coinbase, Inc."},
+    {"ticker": "SCHW", "name": "Charles Schwab"}
+]
+Broker_TICKERS = {x["ticker"] for x in Broker_GROUP}
+
+Banking_GROUP = [
+    {"ticker": "USB", "name": "U.S. Bancorp"},
+    {"ticker": "PNC", "name": "The PNC Financial Services Group"},
+    {"ticker": "WFC", "name": "Wells Fargo"},
+    {"ticker": "BAC", "name": "Bank of America"},
+    {"ticker": "JPM", "name": "JPMorgan Chase"},
+    {"ticker": "C", "name": "Citigroup"},
+    {"ticker": "HSBA", "name": "HSBC Holdings"},
+    {"ticker": "BARC", "name": "Barclays"},
+    {"ticker": "STAN", "name": "Standard Chartered"}
+]
+Banking_TICKERS = {x["ticker"] for x in Banking_GROUP}
 
 Airlines_GROUP = [
     {"ticker": "AAL", "name": "American Airlines"},
@@ -211,7 +243,7 @@ Airlines_GROUP = [
     {"ticker": "FLYY", "name": "Spirit Aviation"},
     {"ticker": "SNCY", "name": "Sun Country Airlines"},
 ]
-EV_TICKERS = {x["ticker"] for x in Airlines_GROUP}
+Airlines_TICKERS = {x["ticker"] for x in Airlines_GROUP}
 
 def _verify_ticker_with_yfinance(ticker: str) -> dict | None:
     try:
@@ -473,6 +505,7 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
     """
     Choose peers in this order of priority:
       1️⃣ Self-defined groups (MEGA7, EVTOL, EV, SEMICONDUCTORS, FINTECH, AIRLINES, etc.)
+          ✅ Now supports multiple group membership
       2️⃣ AI-defined group via industry match (DeepSeek semantic fallback)
       3️⃣ If still insufficient → same sector
       4️⃣ Final fallback → market cap similarity across universe
@@ -485,33 +518,44 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
     base_mc  = base_prof.get("market_cap")
 
     # -----------------------------
-    # Step 1: Self-defined groups
+    # Step 1: Self-defined groups (multi-group support)
     # -----------------------------
     SELF_DEFINED_GROUPS = {
         "Magnificent 7 Tech Giants": MEGA7_TICKERS,
         "eVTOL / Urban Air Mobility": EVTOL_TICKERS,
         "Electric Vehicle Manufacturers": EV_TICKERS,
         "Semiconductors & Semiconductor Equipment": SEMICONDUCTORS_TICKERS,
-        "Fintech / Digital Payments": {x["ticker"] for x in Fintech_GROUP},
+        "Fintech / Digital Payments": {x["ticker"] for x in Lending_GROUP} 
+                                      | {x["ticker"] for x in Payment_GROUP}
+                                      | {x["ticker"] for x in Broker_GROUP}
+                                      | {x["ticker"] for x in Banking_GROUP},
         "Airlines & Aviation": {x["ticker"] for x in Airlines_GROUP},
     }
 
+    matched_groups = []
+    combined_peers = []
+
     for label, tickers in SELF_DEFINED_GROUPS.items():
         if base_ticker_norm in tickers:
-            group_list = []
-            # fetch ticker + name pairs from that group
-            for group in [MEGA7, EVTOL_GROUP, EV_GROUP, SEMICONDUCTORS_GROUP, Fintech_GROUP, Airlines_GROUP]:
+            matched_groups.append(label)
+            # Collect peers from matching group
+            for group in [MEGA7, EVTOL_GROUP, EV_GROUP, SEMICONDUCTORS_GROUP,
+                          Lending_GROUP, Payment_GROUP, Broker_GROUP, Banking_GROUP, Airlines_GROUP]:
                 for g in group:
                     if g["ticker"] != base_ticker_norm and g["ticker"] in tickers:
-                        group_list.append(g)
-            return {
-                "primary_company": base_ticker_norm,
-                "industry": label,
-                "peers": group_list[:peer_limit]
-            }
+                        combined_peers.append(g)
+
+    if matched_groups:
+        # Deduplicate peers by ticker
+        unique_peers = {p["ticker"]: p for p in combined_peers}.values()
+        return {
+            "primary_company": base_ticker_norm,
+            "industry": " / ".join(sorted(set(matched_groups))),
+            "peers": list(unique_peers)[:peer_limit]
+        }
 
     # -----------------------------
-    # Step 2: AI-defined industry fallback
+    # Step 2: AI-defined fallback
     # -----------------------------
     ai_peer_suggestion = None
     try:
@@ -550,7 +594,6 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
     # -----------------------------
     # Step 3: Same industry peers
     # -----------------------------
-    selected = set()
     peers = []
     for t in _UNIVERSE:
         if t == base_ticker_norm:
@@ -587,7 +630,7 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
         }
 
     # -----------------------------
-    # Step 5: Market cap similarity fallback
+    # Step 5: Market cap fallback
     # -----------------------------
     allc = []
     for t in _UNIVERSE:
@@ -602,7 +645,6 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 2):
         "industry": base_ind or base_sec or "Market Cap Similarity",
         "peers": peers_named
     }
-
 
 # ============================================================
 # Analysis math + DeepSeek phrasing
