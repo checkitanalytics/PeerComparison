@@ -203,8 +203,7 @@ Payment_TICKERS = {x["ticker"] for x in Payment_GROUP}
 Lending_GROUP = [
     {"ticker": "CHYM", "name": "Chime Financial"},
     {"ticker": "KLAR", "name": "Klarna Group"},
-    {"ticker": "PYPL", "name": "PayPal Holdings, Inc."},
-    {"ticker": "UPST", "name": "Upst"},
+    {"ticker": "UPST", "name": "Upstart"},
     {"ticker": "LC", "name": "LendingClub Corporation"},
     {"ticker": "SoFi", "name": "Sofi Technology"},
     {"ticker": "AFRM", "name": "Affirm Holdings, Inc."}
@@ -229,7 +228,8 @@ Banking_GROUP = [
     {"ticker": "C", "name": "Citigroup"},
     {"ticker": "HSBA", "name": "HSBC Holdings"},
     {"ticker": "BARC", "name": "Barclays"},
-    {"ticker": "STAN", "name": "Standard Chartered"}
+    {"ticker": "STAN", "name": "Standard Chartered"},
+    {"ticker": "COF", "name": "Capital One Financial"}
 ]
 Banking_TICKERS = {x["ticker"] for x in Banking_GROUP}
 
