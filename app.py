@@ -1842,14 +1842,7 @@ function renderConclusion(){
   const meta = document.getElementById('conclusionMeta');
   const txt = (_lang==='zh') ? (_conclusion.zh || _conclusion.en || '') : (_conclusion.en || '');
   el.textContent = txt || t('noAnalysisAvailable');
-  if (_conclusion.provider) {
-    const provider = _conclusion.provider === 'deepseek' ? 'DeepSeek' : 
-                    _conclusion.provider === 'perplexity' ? 'Perplexity' : 
-                    'Local fallback';
-    meta.textContent = `${t('generatedBy')}: ${provider} - ${t('period')}: ${_conclusion.period || t('latest')}`;
-  } else {
-    meta.textContent = '';
-  }
+  meta.textContent = '';
 }
 </script>
 </body></html>
