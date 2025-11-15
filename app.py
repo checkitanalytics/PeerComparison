@@ -2175,10 +2175,27 @@ def api_get_metrics():
         tickers = data.get("tickers", [])
         if not tickers:
             return jsonify({"error": "Tickers are required"}), 400
+
         out = {}
         for t in tickers:
-            out[t] = calculate_metrics(t) or {"error": "Unable to fetch data"}
+            ticker = _norm_ticker(t)
+
+            # ===== Bilingual invalid ticker validation =====
+            if not ticker or not _is_valid_ticker(ticker):
+                out[ticker] = {
+                    "error": f"Ticker '{ticker}' was not found. Please check the symbol. / 未找到该股票代码，请确认输入无误。",
+                    "valid": False
+                }
+                continue
+            # =================================================
+
+            out[ticker] = calculate_metrics(ticker) or {
+                "error": "Unable to fetch data",
+                "valid": False
+            }
+
         return jsonify(out)
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
