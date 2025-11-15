@@ -185,7 +185,6 @@ EVTOL_GROUP = [
     {"ticker": "EH", "name": "EHang Holdings Limited"},
     {"ticker": "JOBY", "name": "Joby Aviation, Inc."},
     {"ticker": "ACHR", "name": "Archer Aviation Inc."},
-    {"ticker": "BLDE", "name": "Blade Air Mobility, Inc."},
     {"ticker": "LILM", "name": "Lilium N.V."},
     {"ticker": "EVTL", "name": "Vertical Aerospace"},
     {"ticker": "HOVR", "name": "New Horizon Aircraft"},
@@ -239,7 +238,7 @@ Payment_GROUP = [
     {"ticker": "MA", "name": "Mastercard, Inc."},
     {"ticker": "PYPL", "name": "PayPal Holdings, Inc."},
     {"ticker": "AXP", "name": "American Express"},
-    {"ticker": "SQ", "name": "Block, Inc."},
+    {"ticker": "XYZ", "name": "Block, Inc."},
     {"ticker": "COF", "name": "Capital One Financial"},
     {"ticker": "STNE", "name": "StoneCo"},
 ]
