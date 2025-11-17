@@ -151,7 +151,6 @@ def perplexity_chat(messages, temperature=0.2, timeout=30, max_retries=2) -> str
             return None
     return None
 
-
 # ============================================================
 # Peer groups & profiles
 # ============================================================
@@ -2137,6 +2136,36 @@ INDEX_HTML = """<!doctype html>
   </body>
 </html>
 """
+# ============================================================
+# Ticker validation helper (INSERTED)
+# ============================================================
+
+def _is_valid_ticker(ticker: str) -> bool:
+    """
+    Reliable ticker validation using yfinance fast_info.
+    Avoids the unreliable .get_info() method.
+    """
+    try:
+        t = yf.Ticker(ticker)
+        _ensure_yf_session_headers(t)
+
+        # fast_info is the MOST reliable way to validate a ticker
+        fi = getattr(t, "fast_info", None)
+        if not fi:
+            return False
+
+        price = (
+            fi.get("last_price")
+            or fi.get("regular_market_price")
+            or fi.get("lastPrice")
+        )
+
+        # If a ticker has ANY real price → it's valid
+        return price is not None
+
+    except Exception:
+        return False
+
 
 # ============================================================
 # Routes
@@ -2166,6 +2195,7 @@ def api_find_peers():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 
 @app.route("/api/get-metrics", methods=["POST"])
