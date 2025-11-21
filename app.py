@@ -36,6 +36,12 @@ PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
 PERPLEXITY_MODEL   = os.environ.get("PERPLEXITY_MODEL", "llama-3.1-sonar-small-128k-online")
 
 # -----------------------------
+# External Ticker API config
+# -----------------------------
+TICKER_API_BASE_URL = os.environ.get("TICKER_API_BASE_URL", "http://98.83.226.138")
+TICKER_API_KEY = os.environ.get("TICKER_API_KEY")
+
+# -----------------------------
 # S3 config for ticker mapping
 # -----------------------------
 BUCKET_NAME = os.environ.get("CHECKIT_BUCKET", "checkitanalytics")
@@ -355,6 +361,86 @@ def _verify_ticker_with_yfinance(ticker: str) -> dict | None:
         return None
 
 
+def external_api_lookup_ticker(company_name: str) -> dict | None:
+    """
+    Use external ticker API to resolve company name to ticker.
+    Endpoint: GET /api/name-to-ticker/?name=<COMPANY_NAME>
+    Returns: {"query": "...", "count": N, "results": [{"ticker": "...", "company_name": "...", "exchange": "..."}]}
+    """
+    if not TICKER_API_KEY or not TICKER_API_BASE_URL:
+        return None
+    try:
+        url = f"{TICKER_API_BASE_URL}/api/name-to-ticker/"
+        headers = {"X-API-Key": TICKER_API_KEY}
+        params = {"name": company_name}
+        
+        r = requests.get(url, headers=headers, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        
+        # Extract results array
+        results = data.get("results", [])
+        if not results:
+            return None
+        
+        # Prioritize best match
+        query_lower = company_name.lower().strip()
+        best_match = None
+        best_score = -1
+        
+        for result in results:
+            company = (result.get("company_name") or "").lower()
+            ticker = result.get("ticker") or ""
+            if not ticker:
+                continue
+            
+            score = 0
+            
+            # Exact ticker match (e.g., "AAPL" -> AAPL)
+            if query_lower == ticker.lower():
+                score = 1000
+            # Exact company name match
+            elif query_lower == company.lower():
+                score = 900
+            # Query is entire company name without extra words (e.g., "apple" matches "Apple Inc.")
+            elif company.startswith(query_lower + " ") or company.startswith(query_lower + ","):
+                # Prefer shorter company names (Apple Inc. > Apple Hospitality REIT)
+                score = 800 - len(company)
+            # Company name contains query
+            elif query_lower in company:
+                # Prefer shorter company names (more likely to be the main company)
+                score = 600 - len(company)
+            
+            # Bonus for major exchanges
+            exchange = (result.get("exchange") or "").upper()
+            if exchange in ["NASDAQ", "NYSE"]:
+                score += 50
+            
+            if score > best_score:
+                best_score = score
+                best_match = result
+        
+        # Use first result if no match found
+        if not best_match and results:
+            best_match = results[0]
+        
+        if not best_match:
+            return None
+        
+        ticker = best_match.get("ticker")
+        name = best_match.get("company_name")
+        
+        # Verify with yfinance
+        v = _verify_ticker_with_yfinance(ticker)
+        if v:
+            v["source"] = "external-api"
+            return v
+        return {"ticker": ticker, "name": name, "source": "external-api"}
+    except Exception as e:
+        print(f"[WARN] External ticker API lookup failed for '{company_name}': {e}")
+        return None
+
+
 def perplexity_lookup_company(input_text: str) -> dict | None:
     """
     Use Perplexity API to infer the correct ticker for a given company name.
@@ -409,10 +495,11 @@ def resolve_input_to_ticker(user_input: str) -> dict:
     Accepts ticker OR company name, returns {ticker, name, source} or {error}.
     Priority:
       1. Direct ticker (AAPL, TSLA)
-      2. S3 mapping (exact or partial company name)
-      3. Static fallback map
-      4. Perplexity AI fallback
-      5. yfinance heuristic verification
+      2. External API lookup (company name to ticker)
+      3. S3 mapping (exact or partial company name)
+      4. Static fallback map
+      5. Perplexity AI fallback
+      6. yfinance heuristic verification
     """
     raw = (user_input or "").strip()
     if not raw:
@@ -424,7 +511,12 @@ def resolve_input_to_ticker(user_input: str) -> dict:
         if v:
             return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "input"}
 
-    # 2) S3 mapping
+    # 2) External API lookup - for company names
+    v = external_api_lookup_ticker(raw)
+    if v:
+        return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "external-api"}
+
+    # 3) S3 mapping
     mapping = load_s3_ticker_map()
     norm = raw.lower()
     if norm in mapping:
@@ -439,19 +531,19 @@ def resolve_input_to_ticker(user_input: str) -> dict:
             if v:
                 return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "s3-partial"}
 
-    # 3) Static fallback
+    # 4) Static fallback
     if norm in COMMON_NAME_MAP_FALLBACK:
         tkr = COMMON_NAME_MAP_FALLBACK[norm]
         v = _verify_ticker_with_yfinance(tkr)
         if v:
             return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "fallback"}
 
-    # 4) Perplexity fallback
+    # 5) Perplexity fallback
     v = perplexity_lookup_company(raw)
     if v:
         return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "perplexity"}
 
-    # 5) Heuristic last try
+    # 6) Heuristic last try
     v = _verify_ticker_with_yfinance(raw)
     if v:
         return {"input": raw, "ticker": v["ticker"], "name": v.get("name"), "source": "guess"}

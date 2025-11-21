@@ -95,3 +95,9 @@ externalPort = 8080
 [[ports]]
 localPort = 46575
 externalPort = 8081
+
+[userenv]
+
+[userenv.shared]
+TICKER_API_BASE_URL = "http://98.83.226.138"
+TICKER_API_KEY = "E537gTrXqYA4QVm_JAsG3A-oo3zxKf9C-nIM-ShICRs"
