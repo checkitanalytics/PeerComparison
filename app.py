@@ -1480,7 +1480,7 @@ INDEX_HTML = """<!doctype html>
     <div class="max-w-7xl mx-auto">
       <div class="bg-white rounded-lg shadow-xl p-3 md:p-5 mb-3">
         <div class="flex items-center justify-between mb-2">
-          <h1 class="text-xl md:text-3xl font-bold text-gray-800">
+          <h1 class="text-xl md:text-3xl font-bold text-gray-800" id="pageTitle">
             Peer Company Key Metrics Comparison
           </h1>
           <div class="flex items-center gap-1.5">
@@ -1517,7 +1517,7 @@ INDEX_HTML = """<!doctype html>
               id="findButton"
               class="shrink-0 px-3 py-1 bg-indigo-600 text-white rounded text-sm"
             >
-              Find Peers
+              <span id="findButtonText">Find Peers</span>
             </button>
           </div>
 
@@ -1531,14 +1531,14 @@ INDEX_HTML = """<!doctype html>
               id="addButton"
               class="shrink-0 px-3 py-1 bg-emerald-600 text-white rounded text-sm"
             >
-              Add
+              <span id="addButtonText">Add</span>
             </button>
             <button
               id="removeButton"
               class="shrink-0 px-3 py-1 bg-red-600 text-white rounded text-sm opacity-50 cursor-not-allowed"
               disabled
             >
-              Remove
+              <span id="removeButtonText">Remove</span>
             </button>
           </div>
         </div>
@@ -1586,10 +1586,45 @@ INDEX_HTML = """<!doctype html>
         '#a28dd1'
       ];
 
+      // Translation dictionary
+      const TRANSLATIONS = {
+        'Peer Company Key Metrics Comparison': { en: 'Peer Company Key Metrics Comparison', zh: '同行核心数据比较' },
+        'e.g., TSLA or Tesla': { en: 'e.g., TSLA or Tesla', zh: '例如 TSLA 或 Tesla' },
+        'Find Peers': { en: 'Find Peers', zh: '查找同行' },
+        'Add/Remove company (ticker or name)': { en: 'Add/Remove company (ticker or name)', zh: '添加/移除公司（股票代码或公司名称）' },
+        'Add': { en: 'Add', zh: '添加' },
+        'Remove': { en: 'Remove', zh: '移除' },
+        'Peer Companies in': { en: 'Peer Companies in', zh: '对标公司在' },
+        'Primary': { en: 'Primary', zh: '主要公司' },
+        'Peer': { en: 'Peer', zh: '对标公司' },
+        'Primary Company Analysis': { en: 'Primary Company Analysis', zh: '主要公司分析' },
+        'Generating analysis...': { en: 'Generating analysis...', zh: '正在生成分析...' },
+        'Total Revenue & Gross Margin % Trend': { en: 'Total Revenue & Gross Margin % Trend', zh: '总收入与毛利率% 趋势' },
+        'Latest Quarter Metrics': { en: 'Latest Quarter Metrics', zh: '最新季度指标' },
+        'Metric': { en: 'Metric', zh: '指标' },
+        'Quarter Time Series': { en: 'Quarter Time Series', zh: '季度时间序列' },
+        'Please enter a ticker or company name': { en: 'Please enter a ticker or company name', zh: '请输入股票代码或公司名称' },
+        'Please enter a ticker/company to add': { en: 'Please enter a ticker/company to add', zh: '请输入要添加的股票代码或公司名' },
+        'Please enter a ticker/company to remove': { en: 'Please enter a ticker/company to remove', zh: '请输入要移除的股票代码或公司名' },
+        'No peer data available': { en: 'No peer data available', zh: '无对标公司数据' },
+        'already included': { en: 'already included', zh: '已包含' },
+        'No usable data for': { en: 'No usable data for', zh: '无可用数据：' },
+        'is not in the comparison': { en: 'is not in the comparison', zh: '不在比较中' },
+        'Cannot remove the primary company': { en: 'Cannot remove the primary company', zh: '无法删除主要公司' }
+      };
+
+      function getText(key, lang = null) {
+        const l = lang || _lang;
+        return (TRANSLATIONS[key] || {})[l] || TRANSLATIONS[key]?.en || key;
+      }
+
       function showError(msg) {
         const d = document.getElementById('error');
-        d.querySelector('p').textContent = msg;
-        d.classList.remove('hidden');
+        if (d) {
+          const p = d.querySelector('p');
+          if (p) p.textContent = msg;
+          d.classList.remove('hidden');
+        }
       }
 
       function hideError() {
@@ -1626,30 +1661,51 @@ INDEX_HTML = """<!doctype html>
       document.getElementById('addButton').onclick = addCompany;
       document.getElementById('removeButton').onclick = removeCompany;
 
-      document.getElementById('btnEN').onclick = () => {
-        _lang = 'en';
-        updateLangButtons();
+      function updateLanguage() {
+        // Update page title
+        const titleEl = document.getElementById('pageTitle');
+        if (titleEl) titleEl.textContent = getText('Peer Company Key Metrics Comparison');
+        
+        // Update button texts
+        const findBtnText = document.getElementById('findButtonText');
+        if (findBtnText) findBtnText.textContent = getText('Find Peers');
+        
+        const addBtnText = document.getElementById('addButtonText');
+        if (addBtnText) addBtnText.textContent = getText('Add');
+        
+        const removeBtnText = document.getElementById('removeButtonText');
+        if (removeBtnText) removeBtnText.textContent = getText('Remove');
+        
+        // Update placeholder texts
+        const tickerInput = document.getElementById('tickerInput');
+        if (tickerInput) tickerInput.placeholder = getText('e.g., TSLA or Tesla');
+        
+        const manualInput = document.getElementById('manualInput');
+        if (manualInput) manualInput.placeholder = getText('Add/Remove company (ticker or name)');
+        
+        // Update dynamic content
         if (_tickers.length > 0) {
           displayPeers(_peerData);
           renderTable();
           renderTimeSeriesTables();
         }
         renderConclusion();
+      }
+
+      document.getElementById('btnEN').onclick = () => {
+        _lang = 'en';
+        updateLangButtons();
+        updateLanguage();
       };
       document.getElementById('btnZH').onclick = () => {
         _lang = 'zh';
         updateLangButtons();
-        if (_tickers.length > 0) {
-          displayPeers(_peerData);
-          renderTable();
-          renderTimeSeriesTables();
-        }
-        renderConclusion();
+        updateLanguage();
       };
 
       async function resolveAndFind() {
         const raw = document.getElementById('tickerInput').value.trim();
-        if (!raw) return showError('Please enter a ticker or company name');
+        if (!raw) return showError(getText('Please enter a ticker or company name'));
         hideError();
         showLoading(true);
         try {
@@ -1757,7 +1813,7 @@ INDEX_HTML = """<!doctype html>
           .map(
             (p, i) =>
               '<div class="bg-white p-3 rounded-lg shadow">' +
-              '<div class="text-xs text-gray-600 mb-1">Peer ' +
+              '<div class="text-xs text-gray-600 mb-1">' + getText('Peer') + ' ' +
               (i + 1) +
               '</div>' +
               '<div class="text-base md:text-xl font-bold text-gray-800">' +
@@ -1771,12 +1827,14 @@ INDEX_HTML = """<!doctype html>
           .join('');
 
         const html =
-          '<h2 class="text-lg font-semibold mb-2">Peer Companies in ' +
+          '<h2 class="text-lg font-semibold mb-2">' +
+          getText('Peer Companies in') +
+          ' ' +
           tagsHtml +
           '</h2>' +
           '<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">' +
           '<div class="bg-white p-3 rounded-lg shadow">' +
-          '<div class="text-xs text-gray-600 mb-1">Primary</div>' +
+          '<div class="text-xs text-gray-600 mb-1">' + getText('Primary') + '</div>' +
           '<div class="text-base md:text-xl font-bold text-indigo-600 break-words">' +
           primaryLabel +
           '</div>' +
@@ -1797,7 +1855,7 @@ INDEX_HTML = """<!doctype html>
 
       async function addCompany() {
         const raw = document.getElementById('manualInput').value.trim();
-        if (!raw) return showError('Please enter a ticker/company to add');
+        if (!raw) return showError(getText('Please enter a ticker/company to add'));
         hideError();
         showLoading(true);
         try {
@@ -1811,7 +1869,7 @@ INDEX_HTML = """<!doctype html>
 
           const newT = (res.ticker || '').toUpperCase();
           if (!newT) throw new Error('Could not resolve to a ticker');
-          if (_tickers.includes(newT)) return showError(newT + ' already included');
+          if (_tickers.includes(newT)) return showError(newT + ' ' + getText('already included'));
 
           const metricsResp = await fetch('/api/get-metrics', {
             method: 'POST',
@@ -1824,7 +1882,7 @@ INDEX_HTML = """<!doctype html>
             metrics[newT].error ||
             !(metrics[newT]['Total Revenue'] || metrics[newT]['Gross Margin %'])
           )
-            return showError('No usable data for ' + newT);
+            return showError(getText('No usable data for') + ' ' + newT);
 
           _metricsData[newT] = metrics[newT];
           _tickers = uniqUpper([..._tickers, newT]);
@@ -1856,8 +1914,8 @@ INDEX_HTML = """<!doctype html>
 
       async function removeCompany() {
         const raw = document.getElementById('manualInput').value.trim();
-        if (!raw) return showError('Please enter a ticker/company to remove');
-        if (!_peerData) return showError('No peer data available');
+        if (!raw) return showError(getText('Please enter a ticker/company to remove'));
+        if (!_peerData) return showError(getText('No peer data available'));
         hideError();
         showLoading(true);
         try {
@@ -1874,10 +1932,10 @@ INDEX_HTML = """<!doctype html>
 
           const primary = _peerData.primary_company;
           if (tickerToRemove === primary)
-            throw new Error('Cannot remove the primary company');
+            throw new Error(getText('Cannot remove the primary company'));
 
           if (!_tickers.includes(tickerToRemove))
-            throw new Error(tickerToRemove + ' is not in the comparison');
+            throw new Error(tickerToRemove + ' ' + getText('is not in the comparison'));
 
           _tickers = _tickers.filter((t) => t !== tickerToRemove);
           _peerData.peers = (_peerData.peers || []).filter(
@@ -1917,16 +1975,16 @@ INDEX_HTML = """<!doctype html>
         const resultsDiv = document.getElementById('results');
         resultsDiv.innerHTML =
           '<div class="bg-white rounded-lg shadow-xl p-3 md:p-4">' +
-          '<h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">Primary Company Analysis</h3>' +
-          '<div id="conclusionLoading" class="text-sm text-gray-500 hidden">Generating analysis...</div>' +
+          '<h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">' + getText('Primary Company Analysis') + '</h3>' +
+          '<div id="conclusionLoading" class="text-sm text-gray-500 hidden">' + getText('Generating analysis...') + '</div>' +
           '<pre id="conclusionText" class="whitespace-pre-wrap text-sm md:text-base text-gray-800" style="font-family: inherit;">(no analysis yet)</pre>' +
           '</div>' +
           '<div class="bg-white rounded-lg shadow-xl p-3 md:p-4">' +
-          '<h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">Total Revenue & Gross Margin % Trend</h3>' +
+          '<h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">' + getText('Total Revenue & Gross Margin % Trend') + '</h3>' +
           '<div style="height:250px"><canvas id="combinedChart"></canvas></div>' +
           '</div>' +
           '<div class="bg-white rounded-lg shadow-xl p-3 md:p-4 overflow-x-auto">' +
-          '<h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">Latest Quarter Metrics</h3>' +
+          '<h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">' + getText('Latest Quarter Metrics') + '</h3>' +
           '<table class="w-full text-xs md:text-sm" id="metricsTable"></table>' +
           '</div>' +
           '<div id="timeSeriesTables" class="space-y-4 md:space-y-6"></div>';
@@ -2028,7 +2086,7 @@ INDEX_HTML = """<!doctype html>
         });
 
         let html =
-          '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-2 px-1 md:px-2">Metric</th>';
+          '<thead><tr class="border-b-2 border-gray-300"><th class="text-left py-2 px-1 md:px-2">' + getText('Metric') + '</th>';
         _tickers.forEach((t, i) => {
           html +=
             '<th class="text-right py-2 px-1 md:px-2">' +
@@ -2096,7 +2154,7 @@ INDEX_HTML = """<!doctype html>
             '<div class="bg-white rounded-lg shadow-xl p-3 md:p-4 overflow-x-auto">' +
             '<h3 class="text-base md:text-xl font-semibold text-gray-800 mb-2">' +
             ticker +
-            ' - 5 Quarter Time Series</h3>' +
+            ' - 5 ' + getText('Quarter Time Series') + '</h3>' +
             '<table class="w-full text-xs md:text-sm"><thead>' +
             '<tr class="border-b-2 border-gray-300"><th class="text-left py-2 px-1 md:px-2"></th>' +
             _quarters
@@ -2218,6 +2276,7 @@ INDEX_HTML = """<!doctype html>
 
       function renderConclusion() {
         const el = document.getElementById('conclusionText');
+        if (!el) return; // Exit safely if element doesn't exist
         const txt =
           _lang === 'zh'
             ? _conclusion.zh || _conclusion.en || ''
