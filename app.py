@@ -281,6 +281,17 @@ Banking_GROUP = [
 ]
 Banking_TICKERS = {x["ticker"] for x in Banking_GROUP}
 
+# --- Insurtech ---
+Insurtech_GROUP = [
+    {"ticker": "LMND", "name": "Lemonade"},
+    {"ticker": "UPST", "name": "Upstart"},
+    {"ticker": "ROOT", "name": "Root"},
+    {"ticker": "ALL", "name": "Allstate"},
+    {"ticker": "PGR", "name": "Progressive"},
+    {"ticker": "PFG", "name": "Principal Financial Group"},
+]
+Insurtech_TICKERS = {x["ticker"] for x in Insurtech_GROUP}
+
 # --- Airlines & Aviation ---
 Airlines_GROUP = [
     {"ticker": "AAL", "name": "American Airlines Group Inc."},
@@ -857,6 +868,7 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 3):
         "Fintech / Digital Payments": Payment_TICKERS,
         "Fintech / Lending": Lending_TICKERS,
         "Fintech / Broker": Broker_TICKERS,
+        "Insurtech": Insurtech_TICKERS,
         "Airlines & Aviation": Airlines_TICKERS,
         "Banking Services": Banking_TICKERS,
     }
@@ -870,7 +882,7 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 3):
             matched_groups.append(label)
             for group in [
                 MEGA7, EVTOL_GROUP, EV_GROUP,
-                SEMICONDUCTORS_GROUP, Lending_GROUP,
+                SEMICONDUCTORS_GROUP, Lending_GROUP, Insurtech_GROUP,
                 Payment_GROUP, Broker_GROUP, Banking_GROUP,
                 Airlines_GROUP,
             ]:
