@@ -292,6 +292,17 @@ Insurtech_GROUP = [
 ]
 Insurtech_TICKERS = {x["ticker"] for x in Insurtech_GROUP}
 
+# --- Insurtech ---
+Analytics_GROUP = [
+    {"ticker": "FDS", "name": "FactSet Research Systems Inc."},
+    {"ticker": "LSEG.L", "name": "Refinitiv"},
+    {"ticker": "SPGI", "name": "S&P Global"},
+    {"ticker": "MORN", "name": "Morningstar, Inc."},
+    {"ticker": "MSCI", "name": "MSCI Inc."},
+    {"ticker": "NWSA", "name": "Dow Jones & Company"},
+]
+Analytics_TICKERS = {x["ticker"] for x in Analytics_GROUP}
+
 # --- Airlines & Aviation ---
 Airlines_GROUP = [
     {"ticker": "AAL", "name": "American Airlines Group Inc."},
@@ -871,6 +882,7 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 3):
         "Insurtech": Insurtech_TICKERS,
         "Airlines & Aviation": Airlines_TICKERS,
         "Banking Services": Banking_TICKERS,
+        "Analytics & Data": Analytics_TICKERS
     }
 
     matched_groups = []
@@ -883,7 +895,7 @@ def select_peers_any_industry(base_ticker: str, peer_limit: int = 3):
             for group in [
                 MEGA7, EVTOL_GROUP, EV_GROUP,
                 SEMICONDUCTORS_GROUP, Lending_GROUP, Insurtech_GROUP,
-                Payment_GROUP, Broker_GROUP, Banking_GROUP,
+                Payment_GROUP, Broker_GROUP, Banking_GROUP, Analytics_GROUP,
                 Airlines_GROUP,
             ]:
                 for g in group:
@@ -1111,13 +1123,13 @@ def analyze_primary_company(payload: dict) -> dict:
                 mc_ni = float(mc) / float(ni)
         except Exception:
             mc_ni = None
-        latest_vals[tkr] = {"MC/Rev": mc_rev, "MC/NI": mc_ni}
+        latest_vals[tkr] = {"Market Cap/Revenue": mc_rev, "Market Cap/Net Income": mc_ni}
 
     peer_deltas: dict[str, list] = {}
-    peer_deltas["MC/Rev"] = []
-    peer_deltas["MC/NI"]  = []
-    pv_mc_rev = latest_vals[primary]["MC/Rev"]
-    pv_mc_ni  = latest_vals[primary]["MC/NI"]
+    peer_deltas["Market Cap/Revenue"] = []
+    peer_deltas["Market Cap/Net Income"]  = []
+    pv_mc_rev = latest_vals[primary]["Market Cap/Revenue"]
+    pv_mc_ni  = latest_vals[primary]["Market Cap/Net Income"]
 
     def _pct(a, b):
         try:
@@ -1128,17 +1140,17 @@ def analyze_primary_company(payload: dict) -> dict:
             return None
 
     for peer in other_peers:
-        pr_mc_rev = latest_vals[peer]["MC/Rev"]
-        pr_mc_ni  = latest_vals[peer]["MC/NI"]
-        peer_deltas["MC/Rev"].append({"peer": peer, "pct": _pct(pv_mc_rev, pr_mc_rev)})
-        peer_deltas["MC/NI"].append({"peer": peer, "pct": _pct(pv_mc_ni, pr_mc_ni)})
+        pr_mc_rev = latest_vals[peer]["Market Cap/Revenue"]
+        pr_mc_ni  = latest_vals[peer]["Market Cap/Net Income"]
+        peer_deltas["Market Cap/Revenue"].append({"peer": peer, "pct": _pct(pv_mc_rev, pr_mc_rev)})
+        peer_deltas["Market Cap/Net Income"].append({"peer": peer, "pct": _pct(pv_mc_ni, pr_mc_ni)})
 
     def _median_clean(arr):
         arr = [x for x in arr if x is not None]
         return stats.median(arr) if arr else None
 
-    peers_mc_rev_vals = [latest_vals[p]["MC/Rev"] for p in other_peers]
-    peers_mc_ni_vals  = [latest_vals[p]["MC/NI"]  for p in other_peers]
+    peers_mc_rev_vals = [latest_vals[p]["Market Cap/Revenue"] for p in other_peers]
+    peers_mc_ni_vals  = [latest_vals[p]["Market Cap/Net Income"]  for p in other_peers]
     med_mc_rev = _median_clean(peers_mc_rev_vals)
     med_mc_ni  = _median_clean(peers_mc_ni_vals)
 
@@ -1178,9 +1190,9 @@ def analyze_primary_company(payload: dict) -> dict:
 
     summary_out_extras = {
         "valuation_ratios": {
-            "primary": {"MC/Rev": pv_mc_rev, "MC/NI": pv_mc_ni},
-            "peers_median": {"MC/Rev": med_mc_rev, "MC/NI": med_mc_ni},
-            "pct_vs_median": {"MC/Rev": mc_rev_vs_med, "MC/NI": mc_ni_vs_med},
+            "primary": {"Market Cap/Revenue": pv_mc_rev, "Market Cap/Net Income": pv_mc_ni},
+            "peers_median": {"Market Cap/Revenue": med_mc_rev, "Market Cap/Net Income": med_mc_ni},
+            "pct_vs_median": {"Market Cap/Revenue": mc_rev_vs_med, "Market Cap/Net Income": mc_ni_vs_med},
             "label": valuation_label,
         }
     }
@@ -1194,7 +1206,7 @@ def analyze_primary_company(payload: dict) -> dict:
             return None
 
     for metric, row in metric_row_map.items():
-        if metric in ["MC/Rev", "MC/NI"]:
+        if metric in ["Market Cap/Revenue", "Market Cap/Net Income"]:
             continue
         primary_val = safe(row.get(primary))
         deltas = []
@@ -1327,8 +1339,8 @@ def build_conclusion_text(summary: dict) -> str:
     bullets.append("  • " + peer_line("Net Income", label="Net income"))
     bullets.append("  • " + peer_line("Free Cash Flow", label="Free cash flow"))
     bullets.append("  • " + peer_line("Gross Margin %", label="GM (pp)", pp=True))
-    bullets.append("  • " + peer_line("MC/Rev", label="MC/Revenue"))
-    bullets.append("  • " + peer_line("MC/NI",  label="MC/Net income"))
+    bullets.append("  • " + peer_line("Market Cap/Revenue", label="Market Cap/Revenue"))
+    bullets.append("  • " + peer_line("Market Cap/Net Income",  label="Market Cap/Net Income"))
 
     bullets.append("\n- ►► LATEST QUARTER METRICS:")
     bullets.append(
@@ -1380,14 +1392,14 @@ def build_conclusion_text(summary: dict) -> str:
     def _fmt_pct(x): return "n/a" if x is None else f"{x:+.0f}%"
 
     mc_rev_str = (
-        f"MC/Rev {_fmt_ratio(primary_ratios.get('MC/Rev'))} "
-        f"vs peer median {_fmt_ratio(peer_median.get('MC/Rev'))} "
-        f"({_fmt_pct(pct_vm.get('MC/Rev'))})"
+        f"Market Cap/Revenue {_fmt_ratio(primary_ratios.get('Market Cap/Revenue'))} "
+        f"vs peer median {_fmt_ratio(peer_median.get('Market Cap/Revenue'))} "
+        f"({_fmt_pct(pct_vm.get('Market Cap/Revenue'))})"
     )
     mc_ni_str = (
-        f"MC/NI {_fmt_ratio(primary_ratios.get('MC/NI'))} "
-        f"vs median {_fmt_ratio(peer_median.get('MC/NI'))} "
-        f"({_fmt_pct(pct_vm.get('MC/NI'))})"
+        f"Market Cap/Net Income {_fmt_ratio(primary_ratios.get('Market Cap/Net Income'))} "
+        f"vs median {_fmt_ratio(peer_median.get('Market Cap/Net Income'))} "
+        f"({_fmt_pct(pct_vm.get('Market Cap/Net Income'))})"
     )
     verdict_str = f" → {lab}" if lab else ""
 
@@ -2087,8 +2099,8 @@ INDEX_HTML = """<!doctype html>
           'EBIT',
           'Net Income',
           'Free Cash Flow',
-          'MC/Revenue',
-          'MC/Net Income'
+          'Market Cap/Revenue',
+          'Market Cap/Net Income'
         ];
 
         const tickerLatest = _tickers.map((t) => {
@@ -2117,10 +2129,10 @@ INDEX_HTML = """<!doctype html>
           _tickers.forEach((t, i) => {
             let q = tickerLatest[i];
             let f = 'N/A';
-            if (metric === 'MC/Revenue' || metric === 'MC/Net Income') {
+            if (metric === 'Market Cap/Revenue' || metric === 'Market Cap/Net Income') {
               const mc = (((_metricsData[t] || {})['Market Cap'] || {})['Current']);
               let denominator;
-              if (metric === 'MC/Revenue') {
+              if (metric === 'Market Cap/Revenue') {
                 denominator = (((_metricsData[t] || {})['Total Revenue'] || {})[q]);
               } else {
                 denominator = (((_metricsData[t] || {})['Net Income'] || {})[q]);
