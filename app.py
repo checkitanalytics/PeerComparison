@@ -295,7 +295,7 @@ Insurtech_TICKERS = {x["ticker"] for x in Insurtech_GROUP}
 # --- Insurtech ---
 Analytics_GROUP = [
     {"ticker": "FDS", "name": "FactSet Research Systems Inc."},
-    {"ticker": "LSEG.L", "name": "Refinitiv"},
+    {"ticker": "MCO", "name": "Moody's Corporation"},
     {"ticker": "SPGI", "name": "S&P Global"},
     {"ticker": "MORN", "name": "Morningstar, Inc."},
     {"ticker": "MSCI", "name": "MSCI Inc."},
