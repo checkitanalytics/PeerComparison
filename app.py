@@ -1,7 +1,11 @@
 # main.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from dotenv import load_dotenv 
 import os
+
+load_dotenv() 
+
 import json
 import time
 import math
@@ -2353,8 +2357,20 @@ def index():
 @app.route("/api/resolve", methods=["POST"])
 def api_resolve():
     try:
-        data = request.json or ""
-        return jsonify(resolve_input_to_ticker(data.get("input", "")))
+        data = request.json or {}
+        input_value = data.get("input", "")
+        
+        # Validate input
+        if not input_value or not input_value.strip():
+            return jsonify({
+                "error": "Input ticker is required",
+                "ticker": None
+            }), 400
+        
+        # Clean the input
+        input_value = input_value.strip()
+        
+        return jsonify(resolve_input_to_ticker(input_value))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2582,6 +2598,6 @@ def api_health():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5001))
     # debug=False for production; Replit will show logs regardless
     app.run(host="0.0.0.0", port=port, debug=False)
