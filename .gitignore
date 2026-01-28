@@ -15,12 +15,13 @@ venv/
 dist/
 build/
 
-# Testing
+# Testing - Keep test files, ignore test results
 .pytest_cache/
 test_report.html
 htmlcov/
 .coverage
 local_test_log.txt
+*_local_test.py
 
 # IDE
 .vscode/
@@ -42,9 +43,8 @@ Thumbs.db
 .cache/
 .local/
 
-# Local test data
+# Local test data (NOT the test file itself)
 local_*.json
-test_peercomparison.py
 
 # Temporary files
 *.tmp
